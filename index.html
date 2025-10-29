@@ -234,8 +234,8 @@ el('joinMatch').onclick=async()=>{
     setStatus("Recherche d'adversaire...");
 
     // Cherche un match en attente
-    let { data: waiting, error } = await supabase.from('matches').select('*').eq('status','waiting').limit(1).single();
-    if(error) console.log("Erreur select waiting match:", error);
+    let { data: waiting, error } = await supabase.from('matches').select('*').eq('status','waiting').limit(1).maybeSingle();
+if(error){ console.log("Erreur select match:", error); }
 
     if(!waiting){
         // Créer un match
