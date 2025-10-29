@@ -284,10 +284,11 @@ el('joinMatch').onclick = async () => {
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches', filter: `id=eq.${currentMatch.id}` }, payload => {
                 if (payload.new.player2 && payload.new.player2 !== currentUser.username) {
                     currentMatch = payload.new;
-                    opponentJoined();
+                    startMatch();
                 }
             })
             .subscribe();
+
     } else {
         // Rejoindre le match existant
         let { data, error } = await supabase
@@ -302,12 +303,12 @@ el('joinMatch').onclick = async () => {
             .single();
 
         currentMatch = data;
-        opponentJoined();
+        startMatch();
     }
 };
 
-// ---------------- INITIALISATION MATCH ----------------
-async function opponentJoined() {
+// ---------------- INITIALISATION DU MATCH ----------------
+function startMatch() {
     // Définir les couleurs
     myColor = (currentMatch.player1 === currentUser.username) ? 'red' : 'yellow';
     opponentColor = myColor === 'red' ? 'yellow' : 'red';
@@ -350,11 +351,10 @@ async function opponentJoined() {
 
 // ---------------- ENVOYER LE COUP ----------------
 async function sendMove(col) {
-    if (!currentMatch) return;
+    if (!currentMatch || turn !== myColor || gameOver) return;
 
-    // Mettre à jour board localement
-    board = board.map(row => [...row]); // clone pour sécurité
-    dropDisc(col, myColor);
+    // Vérifier si la colonne peut recevoir un pion
+    if (!dropDisc(col, myColor)) return;
 
     // Envoyer coup + boardState à Supabase
     await supabase
@@ -366,6 +366,13 @@ async function sendMove(col) {
         })
         .eq('id', currentMatch.id);
 
+    switchTurn();
+}
+
+// ---------------- SWITCH TURN ----------------
+function switchTurn() {
+    turn = (turn === 'red') ? 'yellow' : 'red';
+    setStatus(turn === myColor ? "À ton tour !" : "Tour de l'autre joueur");
 }
 // ---------------- INITIALISATION ----------------
 updateBoard();
