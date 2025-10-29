@@ -4,49 +4,326 @@
 <meta charset="UTF-8">
 <title>Puissance 4 P2P</title>
 <style>
+/* ---------- TYPOGRAPHIE GLOBALE ---------- */
+:root{
+  --bg:#071128;           
+  --card:#0e2436;         
+  --muted:#9fb7c7;        
+  --text:#e8f3fb;         
+  --accent:#2ea44f;       
+  --accent-strong:#26a14a;
+  --ghost:#133147;        
+  --danger:#e06a4a;       
+  --glass: rgba(255,255,255,0.04);
+  --board-hole:#0b3a57;   
+  --hole-edge:#163a54;
+  --disc-shadow: rgba(0,0,0,0.45);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%;}
+
 body {
-  background: #e0e0e0;
-  font-family: 'Segoe UI', Roboto, sans-serif;
-  display: flex; flex-direction: column; align-items: center;
-  margin: 0; padding: 1em;
+  margin: 0;
+  padding: 0.9rem;
+  font-family: -apple-system, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: linear-gradient(180deg,var(--bg) 0%, #052033 100%);
+  color:var(--text);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  gap:0.8rem;
+  min-height:100vh;
 }
-#loginContainer, #controls, #rematchContainer, #clocks {
-  display: flex; flex-direction: column; align-items: center;
-  gap: 5px;
+
+/* ---------- TITRE ---------- */
+h1{
+  margin: 0.6rem 0 0;
+  font-size:1.15rem;
+  font-weight:700;
+  color:var(--text);
+  letter-spacing:0.2px;
+  text-align:center;
+  width:100%;
+  max-width:420px;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.45);
+  padding: 8px 0;
 }
-textarea { width: 300px; height: 60px; border-radius:4px; border:1px solid #888; padding:5px; resize:none;}
-button { margin: 3px; padding: 6px 12px; border:none; border-radius:4px; cursor:pointer; background:#555; color:#eee; transition:0.2s; }
-button:hover{ background:#666; }
-#status { margin-top: 10px; font-weight:bold; }
-#board {
-  display: grid;
-  grid-template-columns: repeat(7, 50px);
-  grid-template-rows: repeat(6, 50px);
-  gap: 4px;
-  background:#444;
-  padding:5px;
-  border-radius:8px;
-  box-shadow:0 4px 8px rgba(0,0,0,0.3);
-  transform: scale(0.9);
-  max-width: 100%;
+
+/* ---------- CONTENEURS PRINCIPAUX (cartes) ---------- */
+#loginContainer, #controls, #rematchContainer, #clocks, #playerInfo {
+  width:100%;
+  max-width:420px;
+  display:flex;
+  flex-direction:column;
+  gap:0.45rem;
+  align-items:stretch;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02));
+  padding:0.7rem;
+  border-radius:12px;
+  border: 1px solid rgba(255,255,255,0.04);
+  box-shadow: 0 6px 18px rgba(2,6,12,0.55), inset 0 1px 0 rgba(255,255,255,0.02);
 }
-.cell {
-  width: 50px; height: 50px;
-  background: #ddd;
-  border-radius:50%;
-  display:flex; justify-content:center; align-items:center;
+
+/* reduce visual clutter on small: stack slightly tighter */
+#loginContainer{ padding-top:0.5rem }
+
+/* ---------- INPUTS ---------- */
+input[type="text"], input[type="password"], textarea {
+  width:100%;
+  min-height:44px;
+  padding: 10px 12px;
+  border-radius:10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.03));
+  color:var(--text);
+  font-size:0.95rem;
+  outline: none;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+  resize: vertical;
+  transition: box-shadow .12s ease, border-color .12s ease, transform .06s ease;
+}
+
+input::placeholder, textarea::placeholder {
+  color: rgba(255,255,255,0.35);
+  font-weight:500;
+}
+
+input:focus, textarea:focus{
+  border-color: rgba(46,164,79,0.9);
+  box-shadow: 0 6px 18px rgba(46,164,79,0.06), inset 0 1px 0 rgba(255,255,255,0.02);
+  transform: translateY(-1px);
+}
+
+/* specific textarea (code field) */
+textarea#codeField {
+  min-height:92px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+  font-size:0.88rem;
+}
+
+/* ---------- BOUTONS ---------- */
+button {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:44px;
+  padding: 10px 14px;
+  border-radius:12px;
+  border: none;
+  background: var(--ghost);
+  color: var(--text);
+  font-weight:700;
+  font-size:0.95rem;
   cursor:pointer;
-  box-shadow: inset 0 2px 5px rgba(0,0,0,0.3);
+  transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
+  box-shadow: 0 6px 14px rgba(2,6,12,0.5);
 }
-.disc {
-  width: 44px; height:44px;
+
+/* primary (create / connect / apply) */
+#loginContainer button#loginBtn,
+#loginContainer button#createAccountBtn,
+#controls button#createOffer,
+#controls button#createAnswer,
+#controls button#applyCode,
+#rematchContainer button#rematchBtn {
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(38,161,74,0.18);
+}
+
+/* secondary / ghost */
+button#copyCode, button#declineBtn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--muted);
+  box-shadow:none;
+}
+
+/* small icon-like button */
+#declineBtn{
+  min-width:44px;
+  width:44px;
+  padding:0;
+  font-size:1.05rem;
+  border-radius:10px;
+}
+
+/* hover/active */
+button:hover{ transform: translateY(-2px); }
+button:active{ transform: translateY(0); box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+
+/* disabled look */
+button:disabled{
+  opacity:0.45;
+  cursor:not-allowed;
+  transform:none;
+  box-shadow:none;
+}
+
+/* smaller grouping layout for pairs */
+#loginContainer > button, #controls > button { width:100%; }
+
+/* ---------- STATUS / small texts ---------- */
+#status, #loginStatus, #rematchStatus {
+  color:var(--muted);
+  font-weight:600;
+  font-size:0.9rem;
+  padding:6px 8px;
+  border-radius:8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02));
+  border:1px solid rgba(255,255,255,0.02);
+}
+
+/* ---------- PLAYER INFO / CLOCKS ---------- */
+#playerInfo {
+  display:flex;
+  gap:12px;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02));
+}
+
+#playerInfo > div{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  font-size:0.95rem;
+  color:var(--text);
+}
+
+#playerInfo span{ font-weight:800; color: #fff; font-size:0.95rem; }
+
+/* clocks */
+#clocks {
+  display:flex;
+  gap:12px;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px 10px;
+  border-radius:10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.03));
+  border:1px solid rgba(255,255,255,0.03);
+  font-weight:800;
+  font-size:0.95rem;
+}
+
+/* ---------- PLATEAU (board) ---------- */
+#board{
+  width:100%;
+  max-width:420px;
+  aspect-ratio: 7 / 6;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  gap:8px;
+  padding: 14px;
+  border-radius:16px;
+  background: linear-gradient(180deg, var(--board-hole), #082a3d);
+  box-shadow: 0 18px 40px rgba(1,8,15,0.7), inset 0 2px 10px rgba(255,255,255,0.02);
+  transform: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* ensure board never exceeds viewport width on small devices */
+@media (max-width:420px){
+  #board{ padding:10px; gap:6px; border-radius:12px; }
+}
+
+/* each cell looks like a circular hole */
+.cell {
+  width:100%;
+  height:100%;
+  aspect-ratio: 1 / 1;
   border-radius:50%;
-  background:#111;
-  transition:background 0.3s;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background: radial-gradient(circle at 30% 25%, rgba(255,255,255,0.03), transparent 20%),
+              linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.03));
+  box-shadow: inset 0 -6px 12px rgba(0,0,0,0.6), inset 0 2px 6px rgba(255,255,255,0.02);
+  cursor: pointer;
+  transition: transform .08s ease;
+  position:relative;
+  overflow:hidden;
+  border: 1px solid rgba(255,255,255,0.02);
 }
-#rematchContainer { margin-top:10px; display:none; gap:5px; display:flex; align-items:center; }
-#clocks{ display:flex; gap:15px; margin-top:10px; font-size:1.1em; font-weight:bold; background:#ccc; padding:5px 10px; border-radius:6px; }
-#playerInfo { margin-top:10px; display:flex; gap:15px; font-weight:bold; }
+
+/* subtle press feedback */
+.cell:active{ transform: translateY(1px) scale(0.997); }
+
+/* the disc sits inside the hole and is slightly smaller */
+.disc{
+  width:86%;
+  height:86%;
+  border-radius:50%;
+  background: #111;
+  box-shadow: 0 6px 14px var(--disc-shadow), inset 0 2px 8px rgba(255,255,255,0.03);
+  transition: transform .28s cubic-bezier(.2,.9,.3,1), background .2s ease, box-shadow .12s ease;
+  will-change: transform, background;
+  display:block;
+  z-index:1;
+}
+
+/* card for empty hole look: darker center */
+.cell::after{
+  content:"";
+  position:absolute;
+  inset:10% 10%;
+  border-radius:50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.02), rgba(0,0,0,0.3));
+  z-index:0;
+  pointer-events:none;
+  }
+  
+  /* colored discs variants (use board values 'red' or 'yellow') */
+  .disc.red{
+  background: linear-gradient(180deg, #ff5b5b, #c43b3b);
+  box-shadow: 0 8px 18px rgba(196,59,59,0.28), inset 0 2px 8px rgba(255,255,255,0.06);
+  }
+  .disc.yellow{
+  background: linear-gradient(180deg, #ffd35b, #d6a42c);
+  box-shadow: 0 8px 18px rgba(214,164,44,0.22), inset 0 2px 8px rgba(255,255,255,0.06);
+  }
+  
+  /* animation for disc drop: only applied when JS adds the class 'dropped' */
+  @keyframes dropIn {
+  from { transform: translateY(-40%) scale(.98); opacity:0.85; }
+  to   { transform: translateY(0) scale(1); opacity:1; }
+  }
+  .disc.dropped { animation: dropIn .26s cubic-bezier(.2,.9,.3,1) both; }
+  
+  /* ---------- REMATCH CONTAINER ---------- */
+  #rematchContainer {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  justify-content:center;
+  padding:8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02));
+  border-radius:12px;
+  }
+  
+  /* ---------- UTIL / SMALL SCREEN ADJUSTS ---------- */
+  @media (max-width:360px){
+  body{ padding:0.6rem; }
+  h1{ font-size:1rem; }
+  #loginContainer, #controls, #board{ padding:8px; border-radius:10px; }
+  input, button { min-height:40px; font-size:0.92rem; }
+  }
+  
+  /* ---------- ACCESSIBILITÉ FOCUS ---------- */
+  input:focus, textarea:focus, button:focus{
+  outline: 3px solid rgba(46,164,79,0.18);
+  outline-offset:2px;
+  border-radius:10px;
+  }
 </style>
 </head>
 <body>
@@ -61,8 +338,10 @@ button:hover{ background:#666; }
 </div>
 
 <div id="playerInfo" style="display:none;">
-  <div>Moi : <span id="myName"></span> (<span id="myElo"></span>)</div>
-  <div>Adversaire : <span id="opName">—</span> (<span id="opElo">—</span>)</div>
+  <div id="myEloContainer">Elo : <span id="myElo"></span></div>
+  <div id="opponentContainer" style="display:none;">
+    Adversaire : <span id="opName">—</span> (<span id="opElo">—</span>)
+  </div>
 </div>
 
 <div id="controls" style="display:none;">
@@ -122,11 +401,14 @@ el('loginBtn').onclick=()=>{
     el('loginStatus').textContent="Pseudo ou mdp incorrect"; return;
   }
   currentUser={username:username, elo:users[username].elo};
-  el('myName').textContent=username;
   el('myElo').textContent=currentUser.elo;
   el('loginContainer').style.display='none';
   el('controls').style.display='flex';
   el('playerInfo').style.display='flex';
+
+  // Avant la partie : affiche seulement ton Elo
+  el('myEloContainer').style.display='block';
+  el('opponentContainer').style.display='none';
 };
 
 // ---------------- PLATEAU ----------------
