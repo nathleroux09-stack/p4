@@ -393,9 +393,12 @@ el('createAccountBtn').onclick=()=>{
   const password=el('passwordInput').value.trim();
   if(!username||!password){ el('loginStatus').textContent="Pseudo et mdp requis"; return; }
   let users=getUsers();
+  if(!allowedUsers.includes(username)){ el('loginStatus').textContent="Pseudo non autorisé"; return; }
+  
   if(users[username]){ el('loginStatus').textContent="Pseudo déjà utilisé"; return; }
   users[username]={password:password, elo:1000};
   saveUsers(users);
+  
   el('loginStatus').textContent="Compte créé, connecte-toi";
 };
 
