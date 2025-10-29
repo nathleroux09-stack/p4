@@ -370,6 +370,8 @@ button:disabled{
 // ---------------- UTILITAIRES ----------------
 const el=id=>document.getElementById(id);
 const setStatus=t=>el('status').textContent="Statut : "+t;
+// Liste blanche des pseudos autorisés à se connecter
+
 
 let board=Array(6).fill().map(()=>Array(7).fill(null));
 let turn=null, myColor=null, opponentColor=null, gameOver=false;
@@ -378,9 +380,13 @@ let rematchAccepted=false, opponentRematch=false, rematchTimer=null;
 let myTime=300, opTime=300, myInterval=null, opInterval=null;
 let currentUser=null;
 
+const allowedUsers = ["Nathlx", "nathlx", "Olaxee", "Cebe36", "cebe36","olaxee","Quentin Gogry", "Quentin gogry","X"]; // <-- modifie ici
+
 // ---------------- LOCAL STORAGE USERS ----------------
 function getUsers(){ return JSON.parse(localStorage.getItem('users')||'{}'); }
 function saveUsers(users){ localStorage.setItem('users', JSON.stringify(users)); }
+
+
 
 el('createAccountBtn').onclick=()=>{
   const username=el('usernameInput').value.trim();
@@ -411,6 +417,22 @@ el('loginBtn').onclick=()=>{
   el('opponentContainer').style.display='none';
   el('myPseudo').textContent = currentUser.username;
   el('myEloClock').textContent = currentUser.elo;
+  
+  // --- calcul ELO théorique depuis l'historique ---
+  let hist = getHistory().filter(h => h.winner===username || h.loser===username);
+  let theoreticalElo = 1000;
+  for(let h of hist){
+  if(h.winner===username) theoreticalElo += h.eloChange;
+  else if(h.loser===username) theoreticalElo -= h.eloChange;
+  }
+  // si différence > 100, corriger l'ELO
+  if(Math.abs(currentUser.elo - theoreticalElo) > 100){
+  currentUser.elo = theoreticalElo;
+  users[username].elo = theoreticalElo;
+  saveUsers(users);
+  }
+  
+  if(!allowedUsers.includes(username)){ el('loginStatus').textContent="Pseudo non autorisé"; return; }
 };
 
 // ---------------- PLATEAU ----------------
@@ -477,7 +499,7 @@ function endGame(message, winnerColor=null){
   myTime=300; opTime=300; updateClocks();
   el('rematchContainer').style.display='flex';
   setStatus(message);
-
+  
   if(winnerColor){
     let users=getUsers();
     let myElo=currentUser.elo;
@@ -490,6 +512,16 @@ function endGame(message, winnerColor=null){
     users[currentUser.username].elo=currentUser.elo;
     saveUsers(users);
     if(dc?.readyState==='open') dc.send(JSON.stringify({playerInfo:{username:currentUser.username, elo:currentUser.elo}}));
+    
+    // --- enregistrer l'historique de la partie ---
+    let hist = getHistory();
+    hist.push({
+    winner: winnerColor===myColor ? currentUser.username : el('opPseudo').textContent,
+    loser: winnerColor===myColor ? el('opPseudo').textContent : currentUser.username,
+    eloChange: delta,
+    timestamp: Date.now()
+    });
+    saveHistory(hist);
   }
 }
 
