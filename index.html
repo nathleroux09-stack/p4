@@ -114,48 +114,48 @@ button:hover{ background:#666; }
   <span id="rematchStatus"></span>
 </div>
 
+<!-- --- Supabase --->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = 'https://frammmojcrxxvzepirfi.supabase.co';
-const SUPABASE_KEY = 'TA_CLE_ANON_PUBLIC'; // Remplace par ta clé publique
+const SUPABASE_KEY = 'TA_CLE_ANON_PUBLIC'; // remplace par ta clé anon public
 const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const el = id => document.getElementById(id);
 const setAuthStatus = t => el('authStatus').textContent = t;
 
-// --- Auth avec table 'user' ---
+// --- Auth via table user ---
 async function signUp(){
   const username = el('email').value.trim();
-  const password = el('password').value.trim();
-  if(!username || !password){ setAuthStatus("Remplis tous les champs"); return; }
+  const mdp = el('password').value.trim();
+  if(!username||!mdp){ setAuthStatus("Remplis tous les champs"); return; }
 
-  const { data: existing } = await supabase.from('user').select('*').eq('user', username);
-  if(existing.length>0){ setAuthStatus("Nom d'utilisateur déjà pris !"); return; }
+  const { data: existing } = await supabase.from('user').select('*').eq('username', username).single();
+  if(existing){ setAuthStatus("Utilisateur déjà existant"); return; }
 
-  const { error } = await supabase.from('user').insert([{ user: username, mdp: password, elo: 1000 }]);
-  if(error) setAuthStatus("Erreur création compte : " + error.message);
+  const { error } = await supabase.from('user').insert([{username, mdp, elo:1000}]);
+  if(error) setAuthStatus("Erreur : "+error.message);
   else setAuthStatus("Compte créé ! Connecte-toi.");
 }
 
 async function signIn(){
   const username = el('email').value.trim();
-  const password = el('password').value.trim();
-  if(!username || !password){ setAuthStatus("Remplis tous les champs"); return; }
+  const mdp = el('password').value.trim();
+  if(!username||!mdp){ setAuthStatus("Remplis tous les champs"); return; }
 
-  const { data, error } = await supabase.from('user').select('*').eq('user', username).eq('mdp', password);
-  if(error) setAuthStatus("Erreur login : " + error.message);
-  else if(data.length===0) setAuthStatus("Nom d'utilisateur ou mot de passe incorrect");
-  else{
-    setAuthStatus("Connecté !");
-    el('auth').style.display='none';
-    el('controls').style.display='flex';
-  }
+  const { data:user, error } = await supabase.from('user').select('*').eq('username',username).eq('mdp',mdp).single();
+  if(error || !user){ setAuthStatus("Utilisateur ou mot de passe incorrect"); return; }
+
+  setAuthStatus("Connecté !");
+  el('auth').style.display='none';
+  el('controls').style.display='flex';
+  window.currentUser=user;
 }
-
-el('signupBtn').onclick = signUp;
-el('loginBtn').onclick = signIn;
+el('signupBtn').onclick=signUp;
+el('loginBtn').onclick=signIn;
 </script>
 
+<!-- --- Jeu P2P existant --->
 <script>
 // ------------------ Variables ------------------
 let board = Array(6).fill().map(()=>Array(7).fill(null));
@@ -262,166 +262,162 @@ function endGame(message){
 
 function switchTurn(){
   if(turn===myColor){
-    stopClock(myInterval);
-    turn=opponentColor;
-    startClock(turn);
-    setStatus("Tour de l'autre joueur");
+  stopClock(myInterval);
+  turn=opponentColor;
+  startClock(turn);
+  setStatus("Tour de l'autre joueur");
   } else {
-    stopClock(opInterval);
-    turn=myColor;
-    startClock(turn);
-    setStatus("À ton tour !");
+  stopClock(opInterval);
+  turn=myColor;
+  startClock(turn);
+  setStatus("À ton tour !");
   }
-}
-
-// ------------------ Chronos ------------------
-function startClock(player){
+  }
+  
+  // ------------------ Chronos ------------------
+  function startClock(player){
   if(gameOver) return;
   if(player===myColor){
-    myInterval=setInterval(()=>{
-      myTime--; updateClocks();
-      if(myTime<=0){ endGame("Temps écoulé !"); sendEndGame(); }
-    },1000);
+  myInterval=setInterval(()=>{
+  myTime--; updateClocks();
+  if(myTime<=0){ endGame("Temps écoulé !"); sendEndGame(); }
+  },1000);
   } else {
-    opInterval=setInterval(()=>{
-      opTime--; updateClocks();
-      if(opTime<=0){ endGame("Temps écoulé !"); }},1000);
-      }
-      }
-      
-      function stopClock(interval){ if(interval) clearInterval(interval); }
-      function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
-      
-      function updateClocks(){
-      el('myClock').textContent=formatTime(myTime);
-      el('opClock').textContent=formatTime(opTime);
-      }
-      
-      function formatTime(sec){ 
-      return `${Math.floor(sec/60).toString().padStart(2,'0')}:${(sec%60).toString().padStart(2,'0')}`; 
-      }
-      
-      // ------------------ Revanche ------------------
-      function checkRematchStart(){
-      if(rematchAccepted && opponentRematch){
-      clearTimeout(rematchTimer);
-      rematchAccepted=false; opponentRematch=false;
-      myTime=300; opTime=300;
-      clearBoard();
-      turn=null; // Premier à jouer déterminé au premier clic
-      gameOver=false;
-      el('rematchContainer').style.display='none';
-      setStatus("Nouvelle partie — premier joueur à jouer commence");
-      el('clocks').style.display='flex';
-      } else {
-      el('rematchStatus').textContent="En attente de l'autre joueur...";
-      }
-      }
-      
-      function disconnectRematch(){
-      stopAllIntervals();
-      rematchAccepted=false; opponentRematch=false;
-      el('rematchContainer').style.display='none';
-      pc?.close(); pc=null; dc=null;
-      setStatus("Communication coupée, plateau prêt pour nouvelle connexion");
-      }
-      
-      // ------------------ P2P ------------------
-      function makePeer(){
-      pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-      pc.onconnectionstatechange=()=>{
-      if(pc.connectionState==='connected'){ 
-      setStatus("Connecté !"); 
-      el('clocks').style.display='flex'; 
-      } 
-      };
-      pc.ondatachannel=e=>{ dc=e.channel; setupDC(); };
-      return pc;
-      }
-      
-      function setupDC(){
-      dc.onopen=()=>{
-      setStatus("Canal ouvert — prêt à jouer !");
-      if(!myColor){ 
-      myColor=isInitiator?'red':'yellow'; 
-      opponentColor=myColor==='red'?'yellow':'red'; 
-      turn=null; 
-      }
-      };
-      dc.onmessage=e=>{
-      const msg=JSON.parse(e.data);
-      if(msg.col!==undefined){
-      if(turn===null) turn=opponentColor; // Premier coup adversaire
-      dropDisc(msg.col,opponentColor);
-      switchTurn();
-      }
-      if(msg.rematch===true){ opponentRematch=true; checkRematchStart(); }
-      if(msg.rematch===false){ disconnectRematch(); }
-      if(msg.endGame) endGame(msg.endGame);
-      };
-      }
-      
-      // ------------------ Envoi P2P ------------------
-      function sendMove(col){ if(dc?.readyState==='open') dc.send(JSON.stringify({col})); }
-      function sendRematch(accept){ if(dc?.readyState==='open') dc.send(JSON.stringify({rematch:accept})); }
-      function sendEndGame(){ if(dc?.readyState==='open') dc.send(JSON.stringify({endGame:myColor+" gagne !"})); }
-      
-      // ------------------ Encode/Decode ------------------
-      function encodeText(str){ return btoa(str); }
-      function decodeText(code){ try{return atob(code);}catch{return null;} }
-      
-      async function waitIce(pc){ 
-      if(pc.iceGatheringState==='complete') return;
-      return new Promise(res=>{
-      pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete') res(); }
-      });
-      }
-      
-      // ------------------ Boutons P2P ------------------
-      el('createOffer').onclick=async()=>{
-      isInitiator=true;
-      makePeer();
-      dc=pc.createDataChannel('game');
-      setupDC();
-      const offer=await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await waitIce(pc);
-      el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
-      setStatus("Offre créée — envoie le code !");
-      };
-      
-      el('applyCode').onclick=async()=>{
-      const code=el('codeField').value.trim();
-      const sdpStr=decodeText(code);
-      if(!sdpStr){ alert("Code invalide"); return; }
-      const desc=JSON.parse(sdpStr);
-      if(!pc) makePeer();
-      await pc.setRemoteDescription(desc);
-      if(!isInitiator){ el('createAnswer').disabled=false; setStatus("Offre reçue — crée la réponse"); }
-      else setStatus("Réponse appliquée !");
-      };
-      
-      el('createAnswer').onclick=async()=>{
-      const answer=await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitIce(pc);
-      el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
-      setStatus("Réponse prête — envoie le code !");
-      };
-      
-      el('copyCode').onclick=()=>{ navigator.clipboard.writeText(el('codeField').value); alert("Code copié !"); };
-      
-      // --- Rematch ---
-      el('rematchBtn').onclick=()=>{   
-      rematchAccepted=true;   
-      sendRematch(true);   
-      checkRematchStart();   
-      };
-      
-      el('declineBtn').onclick=()=>{   
-      sendRematch(false);   
-      disconnectRematch();   
-      };
-      </script>
-      </body>
-      </html>
+  opInterval=setInterval(()=>{
+  opTime--; updateClocks();
+  if(opTime<=0){ endGame("Temps écoulé !"); }
+  },1000);
+  }
+  }
+  
+  function stopClock(interval){ if(interval) clearInterval(interval); }
+  function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
+  function updateClocks(){
+  el('myClock').textContent=formatTime(myTime);
+  el('opClock').textContent=formatTime(opTime);
+  }
+  function formatTime(sec){ return `${Math.floor(sec/60).toString().padStart(2,'0')}:${(sec%60).toString().padStart(2,'0')}`; }
+  
+  // ------------------ Revanche ------------------
+  function checkRematchStart(){
+  if(rematchAccepted && opponentRematch){
+  clearTimeout(rematchTimer);
+  rematchAccepted=false; opponentRematch=false;
+  myTime=300; opTime=300;
+  clearBoard();
+  turn=null; // Premier joueur à jouer définit le tour
+  gameOver=false;
+  el('rematchContainer').style.display='none';
+  setStatus("Nouvelle partie — premier joueur à cliquer commence");
+  el('clocks').style.display='flex';
+  } else {
+  el('rematchStatus').textContent="En attente de l'autre joueur...";
+  }
+  }
+  
+  function disconnectRematch(){
+  stopAllIntervals();
+  rematchAccepted=false; opponentRematch=false;
+  el('rematchContainer').style.display='none';
+  pc?.close(); pc=null; dc=null;
+  setStatus("Communication coupée, plateau prêt pour nouvelle connexion");
+  }
+  
+  // ------------------ P2P ------------------
+  function makePeer(){
+  pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  pc.onconnectionstatechange=()=>{
+  if(pc.connectionState==='connected'){ 
+  setStatus("Connecté !"); 
+  el('clocks').style.display='flex'; 
+  } 
+  };
+  pc.ondatachannel=e=>{ dc=e.channel; setupDC(); };
+  return pc;
+  }
+  
+  function setupDC(){
+  dc.onopen=()=>{
+  setStatus("Canal ouvert — prêt à jouer !");
+  if(!myColor){ 
+  myColor=isInitiator?'red':'yellow'; 
+  opponentColor=myColor==='red'?'yellow':'red'; 
+  turn=null; 
+  }
+  };
+  dc.onmessage=e=>{
+  const msg=JSON.parse(e.data);
+  if(msg.col!==undefined){
+  if(turn===null) turn=opponentColor; 
+  dropDisc(msg.col,opponentColor);
+  switchTurn();
+  }
+  if(msg.rematch===true){ opponentRematch=true; checkRematchStart(); }
+  if(msg.rematch===false){ disconnectRematch(); }
+  if(msg.endGame) endGame(msg.endGame);
+  };
+  }
+  
+  function sendMove(col){ if(dc?.readyState==='open') dc.send(JSON.stringify({col})); }
+  function sendRematch(accept){ if(dc?.readyState==='open') dc.send(JSON.stringify({rematch:accept})); }
+  function sendEndGame(){ if(dc?.readyState==='open') dc.send(JSON.stringify({endGame:myColor+" gagne !"})); }
+  
+  // ------------------ Encode/Decode ------------------
+  function encodeText(str){ return btoa(str); }
+  function decodeText(code){ try{return atob(code);}catch{return null;} }
+  
+  async function waitIce(pc){ 
+  if(pc.iceGatheringState==='complete') return;
+  return new Promise(res=>{
+  pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete') res(); }
+  });
+  }
+  
+  // ------------------ Boutons P2P ------------------
+  el('createOffer').onclick=async()=>{
+  isInitiator=true;
+  makePeer();
+  dc=pc.createDataChannel('game');
+  setupDC();
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await waitIce(pc);
+  el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
+  setStatus("Offre créée — envoie le code !");
+  };
+  
+  el('applyCode').onclick=async()=>{
+  const code=el('codeField').value.trim();
+  const sdpStr=decodeText(code);
+  if(!sdpStr){ alert("Code invalide"); return; }
+  const desc=JSON.parse(sdpStr);
+  if(!pc) makePeer();
+  await pc.setRemoteDescription(desc);
+  if(!isInitiator){ el('createAnswer').disabled=false; setStatus("Offre reçue — crée la réponse"); }
+  else setStatus("Réponse appliquée !");
+  };
+  
+  el('createAnswer').onclick=async()=>{
+  const answer=await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await waitIce(pc);
+  el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
+  setStatus("Réponse prête — envoie le code !");
+  };
+  
+  el('copyCode').onclick=()=>{ navigator.clipboard.writeText(el('codeField').value); alert("Code copié !"); };
+  
+  // --- Rematch ---
+  el('rematchBtn').onclick=()=>{   
+  rematchAccepted=true;   
+  sendRematch(true);   
+  checkRematchStart();   
+  };
+  
+  el('declineBtn').onclick=()=>{   
+  sendRematch(false);   
+  disconnectRematch();   
+  };
+  </script>
+  </body>
+  </html>
