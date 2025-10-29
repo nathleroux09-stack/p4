@@ -354,8 +354,8 @@ button:disabled{
 </div>
 
 <div id="clocks" style="display:none;">
-  <div>Mon temps : <span id="myClock">05:00</span></div>
-  <div>Adversaire : <span id="opClock">05:00</span></div>
+  <div id="myClockContainer"><span id="myPseudo"></span> (<span id="myEloClock"></span>) : <span id="myClock">05:00</span></div>
+  <div id="opClockContainer"><span id="opPseudo"></span> (<span id="opEloClock"></span>) : <span id="opClock">05:00</span></div>
 </div>
 
 <div id="board"></div>
@@ -409,6 +409,8 @@ el('loginBtn').onclick=()=>{
   // Avant la partie : affiche seulement ton Elo
   el('myEloContainer').style.display='block';
   el('opponentContainer').style.display='none';
+  el('myPseudo').textContent = currentUser.username;
+  el('myEloClock').textContent = currentUser.elo;
 };
 
 // ---------------- PLATEAU ----------------
@@ -507,7 +509,16 @@ function startClock(player){
 }
 function stopClock(interval){ if(interval) clearInterval(interval); }
 function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
-function updateClocks(){ el('myClock').textContent=formatTime(myTime); el('opClock').textContent=formatTime(opTime); }
+function updateClocks(){ 
+  el('myClock').textContent = formatTime(myTime); 
+  el('opClock').textContent = formatTime(opTime); 
+  el('myPseudo').textContent = currentUser.username;
+  el('myEloClock').textContent = currentUser.elo;
+  // si adversaire déjà connecté
+  if(el('opPseudo').textContent !== "—"){
+    el('opEloClock').textContent = el('opElo').textContent;
+  }
+}
 function formatTime(sec){ return `${Math.floor(sec/60).toString().padStart(2,'0')}:${(sec%60).toString().padStart(2,'0')}`; }
 
 // ---------------- REMATCH ----------------
@@ -548,6 +559,11 @@ function setupDC(){
     if(msg.rematch===false){ disconnectRematch(); }
     if(msg.endGame) endGame(msg.endGame);
     if(msg.playerInfo){ el('opName').textContent=msg.playerInfo.username; el('opElo').textContent=msg.playerInfo.elo; }
+    if(msg.playerInfo){
+    el('opPseudo').textContent = msg.playerInfo.username;
+    el('opEloClock').textContent = msg.playerInfo.elo;
+    el('opponentContainer').style.display='block'; // si tu veux afficher le conteneur horloge dès qu’adversaire là
+    }
   };
 }
 
