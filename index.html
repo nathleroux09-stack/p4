@@ -5,11 +5,20 @@
 <title>Puissance 4 P2P</title>
 <style>
 body {
-  background: #e0e0e0; 
+  background: #e0e0e0;
   font-family: 'Segoe UI', Roboto, sans-serif;
-  display: flex; flex-direction: column; align-items: center; 
+  display: flex; flex-direction: column; align-items: center;
   margin: 0; padding: 1em;
 }
+
+#auth {
+  display:flex; flex-direction:column; gap:5px; margin-bottom:10px;
+  background:#f0f0f0; padding:10px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.2);
+}
+#auth input { padding:5px; border-radius:4px; border:1px solid #888; }
+#auth button { margin-top:5px; background:#555; color:#eee; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; transition:0.2s;}
+#auth button:hover{ background:#666; }
+#authStatus { font-weight:bold; color:#333; }
 
 #controls {
   display: flex; flex-direction: column; align-items: center;
@@ -65,7 +74,16 @@ button:hover{ background:#666; }
 <body>
 <h1>Puissance 4 P2P</h1>
 
-<div id="controls">
+<!-- --- Auth --- -->
+<div id="auth">
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Mot de passe">
+  <button id="loginBtn">Se connecter</button>
+  <button id="signupBtn">Créer un compte</button>
+  <div id="authStatus"></div>
+</div>
+
+<div id="controls" style="display:none;">
   <button id="createOffer">Créer Offre</button>
   <button id="createAnswer" disabled>Créer Réponse</button>
   <textarea id="codeField" placeholder="Colle ou copie le code ici"></textarea><br>
@@ -87,10 +105,43 @@ button:hover{ background:#666; }
   <span id="rematchStatus"></span>
 </div>
 
+<!-- --- Supabase JS --->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+const SUPABASE_URL = 'https://frammmojcrxxvzepirfi.supabase.co'; 
+const SUPABASE_KEY = 'TA_CLE_ANON_PUBLIC'; // remplace par ta clé
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// --- Sélection éléments ---
 const el = id => document.getElementById(id);
 const setStatus = t => el('status').textContent = "Statut : " + t;
+const setAuthStatus = t => el('authStatus').textContent = t;
 
+// --- Auth ---
+async function signUp(){
+  const email = el('email').value.trim();
+  const password = el('password').value.trim();
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if(error) setAuthStatus(error.message);
+  else setAuthStatus("Compte créé ! Vérifie ton email.");
+}
+
+async function signIn(){
+  const email = el('email').value.trim();
+  const password = el('password').value.trim();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if(error) setAuthStatus(error.message);
+  else{
+    setAuthStatus("Connecté !");
+    el('auth').style.display='none';
+    el('controls').style.display='flex';
+  }
+}
+
+el('signupBtn').onclick = signUp;
+el('loginBtn').onclick = signIn;
+
+// --- Jeu existant ---
 let board = Array(6).fill().map(()=>Array(7).fill(null));
 let turn = null;
 let myColor = null;
@@ -138,15 +189,12 @@ function clearBoard(){
 
 function handleColumnClick(col){
   if(gameOver) return;
-
-  // Si la partie vient juste de commencer (après une revanche), le premier à jouer définit le tour
   if(turn===null){
-    turn=myColor; // le joueur qui clique commence
+    turn=myColor;
     opponentColor = (myColor==='red'?'yellow':'red');
     setStatus("Tour de " + turn);
     startClock(turn);
   }
-
   if(turn!==myColor) return;
   if(dropDisc(col,myColor)){
     sendMove(col);
@@ -187,9 +235,9 @@ function checkWin(row,col,color){
 function endGame(message){
   gameOver=true;
   stopAllIntervals();
-  clearBoard(); // vide le plateau
-  myTime=300; opTime=300; updateClocks(); // reset chronos
-  el('rematchContainer').style.display='flex'; // affiche boutons
+  clearBoard();
+  myTime=300; opTime=300; updateClocks();
+  el('rematchContainer').style.display='flex';
   setStatus(message);
 }
 
@@ -243,8 +291,8 @@ function checkRematchStart(){
     rematchAccepted=false; opponentRematch=false;
     myTime=300; opTime=300;
     clearBoard();
-    turn=null; // aucun joueur n'a encore joué, premier à jouer commence
-    gameOver=false; // autorise le jeu
+    turn=null;
+    gameOver=false;
     el('rematchContainer').style.display='none';
     setStatus("Nouvelle partie — premier à jouer commence");
     el('clocks').style.display='flex';
@@ -275,8 +323,8 @@ function setupDC(){
   dc.onmessage=e=>{
     const msg=JSON.parse(e.data);
     if(msg.col!==undefined){
-      if(turn===null) turn=opponentColor; // si premier coup de l'adversaire
-      dropDisc(msg.col,opponentColor); 
+      if(turn===null) turn=opponentColor;
+      dropDisc(msg.col,opponentColor);
       switchTurn();
     }
     if(msg.rematch===true){ opponentRematch=true; checkRematchStart(); }
@@ -300,8 +348,8 @@ el('createOffer').onclick=async()=>{
   makePeer();
   dc=pc.createDataChannel('game');
   setupDC();
-  const offer=await pc.createOffer(); 
-  await pc.setLocalDescription(offer); 
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
   await waitIce(pc);
   el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
   setStatus("Offre créée — envoie le code !");
@@ -314,31 +362,36 @@ el('applyCode').onclick=async()=>{
   const desc=JSON.parse(sdpStr);
   if(!pc) makePeer();
   await pc.setRemoteDescription(desc);
-  if(!isInitiator){ el('createAnswer').disabled=false; setStatus("Offre reçue — crée la réponse"); }
-  else setStatus("Réponse appliquée !");
+  if(!isInitiator){
+    el('createAnswer').disabled=false;
+    setStatus("Offre reçue — crée la réponse");
+  } else setStatus("Réponse appliquée !");
 };
 
 el('createAnswer').onclick=async()=>{
-  const answer=await pc.createAnswer(); 
-  await pc.setLocalDescription(answer); 
+  const answer=await pc.createAnswer();
+  await pc.setLocalDescription(answer);
   await waitIce(pc);
   el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
   setStatus("Réponse prête — envoie le code !");
 };
 
-el('copyCode').onclick=()=>{ navigator.clipboard.writeText(el('codeField').value); alert("Code copié !"); };
-
-// --- Rematch buttons ---
-el('rematchBtn').onclick=()=>{ 
-  rematchAccepted=true; 
-  sendRematch(true); 
-  checkRematchStart(); 
+el('copyCode').onclick=()=>{
+  navigator.clipboard.writeText(el('codeField').value);
+  alert("Code copié !");
 };
 
-el('declineBtn').onclick=()=>{ 
-  sendRematch(false); 
-  disconnectRematch(); 
+// --- Rematch buttons ---
+el('rematchBtn').onclick=()=>{
+  rematchAccepted=true;
+  sendRematch(true);
+  checkRematchStart();
+};
+
+el('declineBtn').onclick=()=>{
+  sendRematch(false);
+  disconnectRematch();
 };
 </script>
 </body>
-  </html>
+</html>
