@@ -180,7 +180,7 @@ function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
 // --- Jeu ---
 function handleColumnClick(col){
   if(gameOver) return;
-  if(turn===null){ turn=myColor; opponentColor=myColor==='red'?'yellow':'red'; setStatus("Tour de "+turn); startClock(turn); el('playersInfo').style.display='flex'; }
+  if(turn===null){ turn=myColor; opponentColor=myColor==='red'?'yellow':'red'; setStatus("Tour de "+turn); startClock(turn); el('playersInfo').style.display='flex'; sendPlayerInfo(); }
   if(turn!==myColor) return;
   if(dropDisc(col,myColor)){ sendMove(col); switchTurn(); }
 }
@@ -216,76 +216,107 @@ function disconnectRematch(){ stopAllIntervals(); rematchAccepted=false; opponen
 // --- P2P WebRTC ---
 function makePeer(){
   pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-  pc.onconnectionstatechange=()=>{ if(pc.connectionState==='connected'){ setStatus("Connecté !"); el('clocks').style.display='flex'; el('playersInfo').style.display='flex'; sendPlayerInfo(); } };
-  pc.ondatachannel=e=>{ dc=e.channel; setupDC(); };
-  return pc;
-}
-function setupDC(){
-  dc.onopen=()=>{
+  pc.onconnectionstatechange=()=>{ 
+    if(pc.connectionState==='connected'){
+    setStatus("Connecté !"); 
+    el('clocks').style.display='flex';
+    sendPlayerInfo(); // envoie pseudo/ELO dès que connecté
+    }
+    };
+    pc.ondatachannel=e=>{ dc=e.channel; setupDC(); };
+    return pc;
+    }
+    
+    function setupDC(){
+    dc.onopen=()=>{
     setStatus("Canal ouvert — prêt à jouer !");
-    if(!myColor){ myColor=isInitiator?'red':'yellow'; opponentColor=myColor==='red'?'yellow':'red'; turn=null; }
-  };
-  dc.onmessage=e=>{
+    if(!myColor){
+    myColor=isInitiator?'red':'yellow';
+    opponentColor=myColor==='red'?'yellow':'red';
+    turn=null; // premier à jouer déterminera le tour
+    }
+    sendPlayerInfo();
+    };
+    dc.onmessage=e=>{
     const msg=JSON.parse(e.data);
-    if(msg.col!==undefined){ if(turn===null) turn=opponentColor; dropDisc(msg.col,opponentColor); switchTurn(); }
+    if(msg.col!==undefined){
+    if(turn===null) turn=opponentColor;
+    dropDisc(msg.col, opponentColor);
+    switchTurn();
+    }
     if(msg.rematch===true){ opponentRematch=true; checkRematchStart(); }
     if(msg.rematch===false){ disconnectRematch(); }
     if(msg.endGame) endGame(msg.endGame);
-    if(msg.playerInfo){ el('opName').textContent=msg.playerInfo.username; el('opElo').textContent=msg.playerInfo.elo; }
-  };
-}
-function sendMove(col){ if(dc?.readyState==='open') dc.send(JSON.stringify({col})); }
-function sendRematch(accept){ if(dc?.readyState==='open') dc.send(JSON.stringify({rematch:accept})); }
-function sendEndGame(){ if(dc?.readyState==='open') dc.send(JSON.stringify({endGame:myColor+" gagne !"})); }
-function sendPlayerInfo(){ if(dc?.readyState==='open') dc.send(JSON.stringify({playerInfo:currentUser})); }
-
-// --- Encode / Decode pour copier-coller ---
-function encodeText(str){ return btoa(str); }
-function decodeText(code){ try{return atob(code);}catch{return null;} }
-
-async function waitIce(pc){ if(pc.iceGatheringState==='complete') return; return new Promise(res=>{ pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete') res(); } }); }
-
-// --- Boutons P2P ---
-el('createOffer').onclick=async()=>{
-  isInitiator=true; makePeer(); dc=pc.createDataChannel('game'); setupDC();
-  const offer=await pc.createOffer(); await pc.setLocalDescription(offer); await waitIce(pc);
-  el('codeField').value=encodeText(JSON.stringify(pc.localDescription)); setStatus("Offre créée — envoie le code !");
-};
-el('applyCode').onclick=async()=>{
-const code=el('codeField').value.trim();
-const sdpStr=decodeText(code);
-if(!sdpStr){ alert("Code invalide"); return; }
-const desc=JSON.parse(sdpStr);
-if(!pc) makePeer();
-await pc.setRemoteDescription(desc);
-if(!isInitiator){ el('createAnswer').disabled=false; setStatus("Offre reçue — crée la réponse"); } 
-else setStatus("Réponse appliquée !");
-};
-
-el('createAnswer').onclick=async()=>{
-  const answer=await pc.createAnswer(); 
-  await pc.setLocalDescription(answer); 
-  await waitIce(pc);
-  el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
-  setStatus("Réponse prête — envoie le code !");
-};
-
-el('copyCode').onclick=()=>{
-  navigator.clipboard.writeText(el('codeField').value);
-  alert("Code copié !");
-};
-
-// --- Rematch buttons ---
-el('rematchBtn').onclick=()=>{   
-  rematchAccepted=true;   
-  sendRematch(true);   
-  checkRematchStart();   
-};
-
-el('declineBtn').onclick=()=>{   
-  sendRematch(false);   
-  disconnectRematch();   
-};
-</script>
-</body>
-</html>
+    if(msg.playerInfo){
+    el('opName').textContent=msg.playerInfo.username;
+    el('opElo').textContent=msg.playerInfo.elo;
+    }
+    };
+    }
+    
+    function sendMove(col){ if(dc?.readyState==='open') dc.send(JSON.stringify({col})); }
+    function sendRematch(accept){ if(dc?.readyState==='open') dc.send(JSON.stringify({rematch:accept})); }
+    function sendEndGame(){ if(dc?.readyState==='open') dc.send(JSON.stringify({endGame:myColor+" gagne !"})); }
+    function sendPlayerInfo(){
+    if(dc?.readyState==='open'){
+    dc.send(JSON.stringify({playerInfo:{username:currentUser.username, elo:currentUser.elo}}));
+    }
+    }
+    
+    // --- Encode/Decode simple pour textarea ---
+    function encodeText(str){ return btoa(str); }
+    function decodeText(code){ try{return atob(code);}catch{return null;} }
+    
+    // --- Wait ICE ---
+    async function waitIce(pc){
+    if(pc.iceGatheringState==='complete') return;
+    return new Promise(res=>{ pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete') res(); }; });
+    }
+    
+    // --- Boutons P2P ---
+    el('createOffer').onclick=async()=>{
+    isInitiator=true;
+    makePeer();
+    dc=pc.createDataChannel('game');
+    setupDC();
+    const offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIce(pc);
+    el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
+    setStatus("Offre créée — envoie le code !");
+    };
+    
+    el('applyCode').onclick=async()=>{
+    const code=el('codeField').value.trim();
+    const sdpStr=decodeText(code);
+    if(!sdpStr){ alert("Code invalide"); return; }
+    const desc=JSON.parse(sdpStr);
+    if(!pc) makePeer();
+    await pc.setRemoteDescription(desc);
+    if(!isInitiator){ el('createAnswer').disabled=false; setStatus("Offre reçue — crée la réponse"); }
+    else setStatus("Réponse appliquée !");
+    };
+    
+    el('createAnswer').onclick=async()=>{
+    const answer=await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitIce(pc);
+    el('codeField').value=encodeText(JSON.stringify(pc.localDescription));
+    setStatus("Réponse prête — envoie le code !");
+    };
+    
+    el('copyCode').onclick=()=>{ navigator.clipboard.writeText(el('codeField').value); alert("Code copié !"); };
+    
+    // --- Rematch buttons ---
+    el('rematchBtn').onclick=()=>{
+    rematchAccepted=true;
+    sendRematch(true);
+    checkRematchStart();
+    };
+    el('declineBtn').onclick=()=>{
+    sendRematch(false);
+    disconnectRematch();
+    };
+    </script>
+    </body>
+    </html>
