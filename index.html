@@ -84,7 +84,7 @@ button:hover{ background:#666; }
 
 <!-- --- Auth --- -->
 <div id="auth">
-  <input id="email" type="email" placeholder="Email">
+  <input id="email" type="text" placeholder="Nom d'utilisateur">
   <input id="password" type="password" placeholder="Mot de passe">
   <button id="loginBtn">Se connecter</button>
   <button id="signupBtn">Créer un compte</button>
@@ -114,30 +114,37 @@ button:hover{ background:#666; }
   <span id="rematchStatus"></span>
 </div>
 
-<!-- --- Supabase --->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = 'https://frammmojcrxxvzepirfi.supabase.co';
-const SUPABASE_KEY = 'TA_CLE_ANON_PUBLIC'; // remplace par ta clé anon public
+const SUPABASE_KEY = 'TA_CLE_ANON_PUBLIC'; // Remplace par ta clé publique
 const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const el = id => document.getElementById(id);
 const setAuthStatus = t => el('authStatus').textContent = t;
 
-// --- Auth ---
+// --- Auth avec table 'user' ---
 async function signUp(){
-  const email = el('email').value.trim();
+  const username = el('email').value.trim();
   const password = el('password').value.trim();
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if(error) setAuthStatus(error.message);
-  else setAuthStatus("Compte créé ! Vérifie ton email.");
+  if(!username || !password){ setAuthStatus("Remplis tous les champs"); return; }
+
+  const { data: existing } = await supabase.from('user').select('*').eq('user', username);
+  if(existing.length>0){ setAuthStatus("Nom d'utilisateur déjà pris !"); return; }
+
+  const { error } = await supabase.from('user').insert([{ user: username, mdp: password, elo: 1000 }]);
+  if(error) setAuthStatus("Erreur création compte : " + error.message);
+  else setAuthStatus("Compte créé ! Connecte-toi.");
 }
 
 async function signIn(){
-  const email = el('email').value.trim();
+  const username = el('email').value.trim();
   const password = el('password').value.trim();
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if(error) setAuthStatus(error.message);
+  if(!username || !password){ setAuthStatus("Remplis tous les champs"); return; }
+
+  const { data, error } = await supabase.from('user').select('*').eq('user', username).eq('mdp', password);
+  if(error) setAuthStatus("Erreur login : " + error.message);
+  else if(data.length===0) setAuthStatus("Nom d'utilisateur ou mot de passe incorrect");
   else{
     setAuthStatus("Connecté !");
     el('auth').style.display='none';
@@ -149,7 +156,6 @@ el('signupBtn').onclick = signUp;
 el('loginBtn').onclick = signIn;
 </script>
 
-<!-- --- Jeu P2P existant --->
 <script>
 // ------------------ Variables ------------------
 let board = Array(6).fill().map(()=>Array(7).fill(null));
@@ -279,18 +285,21 @@ function startClock(player){
   } else {
     opInterval=setInterval(()=>{
       opTime--; updateClocks();
-      if(opTime<=0){ endGame("Temps écoulé !"); }  
-      },1000);
+      if(opTime<=0){ endGame("Temps écoulé !"); }},1000);
       }
       }
       
       function stopClock(interval){ if(interval) clearInterval(interval); }
       function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
+      
       function updateClocks(){
       el('myClock').textContent=formatTime(myTime);
       el('opClock').textContent=formatTime(opTime);
       }
-      function formatTime(sec){ return `${Math.floor(sec/60).toString().padStart(2,'0')}:${(sec%60).toString().padStart(2,'0')}`; }
+      
+      function formatTime(sec){ 
+      return `${Math.floor(sec/60).toString().padStart(2,'0')}:${(sec%60).toString().padStart(2,'0')}`; 
+      }
       
       // ------------------ Revanche ------------------
       function checkRematchStart(){
@@ -299,10 +308,10 @@ function startClock(player){
       rematchAccepted=false; opponentRematch=false;
       myTime=300; opTime=300;
       clearBoard();
-      turn=null; // Premier à jouer définit le tour
+      turn=null; // Premier à jouer déterminé au premier clic
       gameOver=false;
       el('rematchContainer').style.display='none';
-      setStatus("Nouvelle partie — premier joueur à cliquer commence");
+      setStatus("Nouvelle partie — premier joueur à jouer commence");
       el('clocks').style.display='flex';
       } else {
       el('rematchStatus').textContent="En attente de l'autre joueur...";
@@ -342,7 +351,7 @@ function startClock(player){
       dc.onmessage=e=>{
       const msg=JSON.parse(e.data);
       if(msg.col!==undefined){
-      if(turn===null) turn=opponentColor; // si premier coup adversaire
+      if(turn===null) turn=opponentColor; // Premier coup adversaire
       dropDisc(msg.col,opponentColor);
       switchTurn();
       }
@@ -352,20 +361,19 @@ function startClock(player){
       };
       }
       
+      // ------------------ Envoi P2P ------------------
       function sendMove(col){ if(dc?.readyState==='open') dc.send(JSON.stringify({col})); }
       function sendRematch(accept){ if(dc?.readyState==='open') dc.send(JSON.stringify({rematch:accept})); }
       function sendEndGame(){ if(dc?.readyState==='open') dc.send(JSON.stringify({endGame:myColor+" gagne !"})); }
       
-      // ------------------ Encode/Decode simple ------------------
+      // ------------------ Encode/Decode ------------------
       function encodeText(str){ return btoa(str); }
       function decodeText(code){ try{return atob(code);}catch{return null;} }
       
       async function waitIce(pc){ 
       if(pc.iceGatheringState==='complete') return;
       return new Promise(res=>{
-      pc.onicegatheringstatechange=()=>{
-      if(pc.iceGatheringState==='complete') res();
-      }
+      pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete') res(); }
       });
       }
       
