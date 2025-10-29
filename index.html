@@ -79,6 +79,14 @@ input:focus,textarea:focus,button:focus{outline:3px solid rgba(46,164,79,0.18); 
   <button id="declineBtn">✖</button>
   <span id="rematchStatus"></span>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
+<script type="module">
+// ---------------- SUPABASE SETUP ----------------
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+const SUPABASE_URL = 'https://arqyrmvnenrtxqryihnz.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFycXlybXZuZW5ydHhxcnlpaG56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE3NTE1NjUsImV4cCI6MjA3NzMyNzU2NX0.fGs08ElwvYY2JOnWmq4sveYEa2Dg7g0BsdmRrkRM4xc'; // ta clé anon complète ici
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 <script>
 // ---------------- UTILITAIRES ----------------
