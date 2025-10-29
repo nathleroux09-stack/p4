@@ -250,79 +250,107 @@ el('declineBtn').onclick=async()=>{
 };
 
 // ---------------- MATCHMAKING ----------------
-el('joinMatch').onclick=async()=>{
-  setStatus("Recherche d'adversaire...");
-  
-  // 1. Créer ou rejoindre match en attente
-  let { data: waiting, error } = await supabase.from('matches').select('*').eq('status','waiting').limit(1).single();
-  
-  if(!waiting){
-    // Créer un match en attente
-    let { data, error } = await supabase.from('matches').insert([{
-      player1: currentUser.username,
-      player2:'',
-      status:'waiting',
-      p1_elo: currentUser.elo.toString(),
-      p2_elo:'0'
-    }]).select().single();
-    currentMatch = data;
-    
-    // Écouter l'adversaire qui rejoint
-    supabase.from(`matches:id=eq.${currentMatch.id}`).on('UPDATE', payload=>{
-      if(payload.new.player2){
-        currentMatch = payload.new;
+el('joinMatch').onclick = async () => {
+    setStatus("Recherche d'adversaire...");
+
+    // 1. Vérifie s'il existe un match en attente
+    let { data: waitingMatch, error } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('status', 'waiting')
+        .limit(1)
+        .maybeSingle();
+
+    if (!waitingMatch) {
+        // Crée un nouveau match en attente
+        let { data, error } = await supabase.from('matches').insert([{
+            player1: currentUser.username,
+            player2: '',
+            status: 'waiting',
+            p1_elo: currentUser.elo,
+            p2_elo: 0,
+            boardState: JSON.stringify(board)
+        }]).select().single();
+
+        currentMatch = data;
+
+        // Abonne le joueur 1 aux updates
+        supabase.from(`matches:id=eq.${currentMatch.id}`).on('UPDATE', payload => {
+            const match = payload.new;
+            if (match.player2 && !currentMatch.player2) {
+                currentMatch = match;
+                opponentJoined();
+            }
+        }).subscribe();
+
+    } else {
+        // Rejoindre le match existant
+        let { data, error } = await supabase.from('matches').update({
+            player2: currentUser.username,
+            p2_elo: currentUser.elo,
+            status: 'playing',
+            boardState: JSON.stringify(board)
+        }).eq('id', waitingMatch.id).select().single();
+
+        currentMatch = data;
         opponentJoined();
-      }
-    }).subscribe();
-  } else {
-    // Rejoindre match existant
-    let { data, error } = await supabase.from('matches').update({
-      player2: currentUser.username,
-      p2_elo: currentUser.elo.toString(),
-      status:'playing'
-    }).eq('id', waiting.id).select().single();
-    currentMatch = data;
-    opponentJoined();
-  }
+    }
 };
 
-async function opponentJoined(){
-  myColor = (currentMatch.player1 === currentUser.username)?'red':'yellow';
-  opponentColor = myColor==='red'?'yellow':'red';
-  turn = 'red';
-  
-  const opponentName = (myColor==='red') ? currentMatch.player2 : currentMatch.player1;
-const opponentElo = parseInt((myColor==='red') ? currentMatch.p2_elo : currentMatch.p1_elo);
+async function opponentJoined() {
+    // Définition des couleurs
+    myColor = (currentMatch.player1 === currentUser.username) ? 'red' : 'yellow';
+    opponentColor = (myColor === 'red') ? 'yellow' : 'red';
+    turn = 'red'; // player1 commence toujours
 
-el('opName').textContent = opponentName;
-el('opElo').textContent = opponentElo;
-el('opponentContainer').style.display = 'flex';
-el('clocks').style.display = 'flex';
-setStatus(turn === myColor ? "À ton tour !" : "Tour de l'autre joueur");
+    // Infos adversaire
+    const opponentName = (myColor === 'red') ? currentMatch.player2 : currentMatch.player1;
+    const opponentElo = (myColor === 'red') ? currentMatch.p2_elo : currentMatch.p1_elo;
 
-// Écouter les coups en temps réel
-supabase.from(`matches:id=eq.${currentMatch.id}`).on('UPDATE', payload => {
-    const move = payload.new.last_move;
-    if (!move) return;
-    
-    const movePlayer = payload.new.last_player;
-    if (movePlayer !== currentUser.username) {
-        // Joueur adverse a joué
-        dropDisc(move, opponentColor);
-        switchTurn();
-    }
-}).subscribe();
+    el('opName').textContent = opponentName;
+    el('opElo').textContent = opponentElo;
+    el('opponentContainer').style.display = 'flex';
+    el('clocks').style.display = 'flex';
+    setStatus(turn === myColor ? "À ton tour !" : "Tour de l'autre joueur");
+
+    // Abonnement aux updates du match
+    supabase.from(`matches:id=eq.${currentMatch.id}`).on('UPDATE', payload => {
+        const match = payload.new;
+
+        // Met à jour le board depuis Supabase pour rester synchro
+        if (match.boardState) {
+            board = JSON.parse(match.boardState);
+            updateBoard();
+        }
+
+        // Détecte les coups adverses
+        if (match.last_player && match.last_player !== currentUser.username) {
+            switchTurn();
+        }
+    }).subscribe();
 }
 
 // ---------------- ENVOYER LE COUP ----------------
 async function sendMove(col) {
-    if (!currentMatch) return;
-    await supabase.from('matches').update({
-        last_move: col.toString(),
-        last_player: currentUser.username
-    }).eq('id', currentMatch.id);
-}
+    if (!currentMatch || turn !== myColor || gameOver) return;
 
+    // Met à jour le board local
+    if (!dropDisc(col, myColor)) return;
+
+    // Met à jour le match sur Supabase
+    currentMatch.last_move = col;
+    currentMatch.last_player = currentUser.username;
+    currentMatch.boardState = JSON.stringify(board);
+
+    await supabase.from('matches').update({
+        last_move: col,
+        last_player: currentUser.username,
+        boardState: currentMatch.boardState
+    }).eq('id', currentMatch.id);
+
+    // Passe le tour
+    switchTurn();
+}
 // ---------------- INITIALISATION ----------------
 updateBoard();
 updateClocks();
