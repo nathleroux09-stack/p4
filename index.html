@@ -366,13 +366,36 @@ button:disabled{
   <span id="rematchStatus"></span>
 </div>
 
+<!-- Librairies : Supabase + bcryptjs -->
+<script type="module">
+  // supabase as ESM
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+
+  // Config Supabase (fourni par l'utilisateur)
+  const SUPABASE_URL = 'https://arqyrmvnenrtxqryihnz.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFycXlybXZuZW5ydHhxcnlpaG56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE3NTE1NjUsImV4cCI6MjA3NzMyNzU2NX0.fGs08ElwvYY2JOnWmq4sveYEa2Dg7g0BsdmRrkRM4xc';
+
+  window.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+</script>
+
+<!-- bcryptjs (non-module) : expose `bcrypt` global -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
+
 <script>
 // ---------------- UTILITAIRES ----------------
 const el=id=>document.getElementById(id);
 const setStatus=t=>el('status').textContent="Statut : "+t;
-// Liste blanche des pseudos autorisés à se connecter
 
+// keep some local helpers for backward compatibility (history, local cache)
+function getLocalUsers(){ return JSON.parse(localStorage.getItem('users')||'{}'); }
+function saveLocalUsers(users){ localStorage.setItem('users', JSON.stringify(users)); }
 
+function getHistory(){
+  try{ return JSON.parse(localStorage.getItem('game_history')||'[]'); }catch{return [];}
+}
+function saveHistory(h){ localStorage.setItem('game_history', JSON.stringify(h)); }
+
+// ---------------- STATE ----------------
 let board=Array(6).fill().map(()=>Array(7).fill(null));
 let turn=null, myColor=null, opponentColor=null, gameOver=false;
 let pc=null, dc=null, isInitiator=false;
@@ -380,62 +403,112 @@ let rematchAccepted=false, opponentRematch=false, rematchTimer=null;
 let myTime=300, opTime=300, myInterval=null, opInterval=null;
 let currentUser=null;
 
-const allowedUsers = ["Nathlx", "nathlx", "Olaxee", "Cebe36", "cebe36","olaxee","Quentin Gogry", "Quentin gogry","X","popkex"]; // <-- modifie ici
+// ---------------- SUPABASE HELPERS ----------------
+async function dbGetProfileByUsername(username){
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('username, elo, password')
+    .eq('username', username)
+    .maybeSingle();
+  if(error) throw error;
+  return data; // null if not found
+}
 
-// ---------------- LOCAL STORAGE USERS ----------------
-function getUsers(){ return JSON.parse(localStorage.getItem('users')||'{}'); }
-function saveUsers(users){ localStorage.setItem('users', JSON.stringify(users)); }
+async function dbCreateProfile({ username, passwordHash, elo=1000 }){
+  const { data, error } = await supabase
+    .from('profiles')
+    .insert({ username, password: passwordHash, elo })
+    .select()
+    .maybeSingle();
+  if(error) throw error;
+  return data;
+}
 
+async function dbUpdateElo(username, newElo){
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ elo: newElo })
+    .eq('username', username);
+  if(error) throw error;
+  return data;
+}
 
+// ---------------- AUTH (create account / login) ----------------
+// We will hash client-side using bcrypt.hashSync (salt rounds = 10)
+// Note: bcrypt is loaded as a global `bcrypt` by the included script
 
-el('createAccountBtn').onclick=()=>{
+el('createAccountBtn').onclick=async()=>{
   const username=el('usernameInput').value.trim();
   const password=el('passwordInput').value.trim();
   if(!username||!password){ el('loginStatus').textContent="Pseudo et mdp requis"; return; }
-  let users=getUsers();
-  if(!allowedUsers.includes(username)){ el('loginStatus').textContent="Pseudo non autorisé"; return; }
-  
-  if(users[username]){ el('loginStatus').textContent="Pseudo déjà utilisé"; return; }
-  users[username]={password:password, elo:1000};
-  saveUsers(users);
-  
-  el('loginStatus').textContent="Compte créé, connecte-toi";
+  el('createAccountBtn').disabled = true;
+  el('loginStatus').textContent = 'Création en cours...';
+
+  try{
+    // check if exists
+    const existing = await dbGetProfileByUsername(username);
+    if(existing){ el('loginStatus').textContent="Pseudo déjà utilisé"; el('createAccountBtn').disabled=false; return; }
+
+    // hash password (sync for simplicity)
+    const saltRounds = 10;
+    const hash = bcrypt.hashSync(password, saltRounds);
+
+    // create profile in Supabase
+    await dbCreateProfile({ username, passwordHash: hash, elo: 1000 });
+
+    // keep a local cache for instant UX (optional)
+    let users = getLocalUsers();
+    users[username] = { password: '***', elo: 1000 };
+    saveLocalUsers(users);
+
+    el('loginStatus').textContent="Compte créé. Connecte-toi.";
+  }catch(err){
+    console.error(err);
+    el('loginStatus').textContent = 'Erreur création: ' + (err.message || JSON.stringify(err));
+  } finally {
+    el('createAccountBtn').disabled = false;
+  }
 };
 
-el('loginBtn').onclick=()=>{
+el('loginBtn').onclick=async()=>{
   const username=el('usernameInput').value.trim();
   const password=el('passwordInput').value.trim();
-  let users=getUsers();
-  if(!users[username] || users[username].password!==password){
-    el('loginStatus').textContent="Pseudo ou mdp incorrect"; return;
-  }
-  currentUser={username:username, elo:users[username].elo};
-  el('myElo').textContent=currentUser.elo;
-  el('loginContainer').style.display='none';
-  el('controls').style.display='flex';
-  el('playerInfo').style.display='flex';
+  if(!username||!password){ el('loginStatus').textContent="Pseudo et mdp requis"; return; }
+  el('loginBtn').disabled = true;
+  el('loginStatus').textContent = 'Connexion...';
 
-  // Avant la partie : affiche seulement ton Elo
-  el('myEloContainer').style.display='block';
-  el('opponentContainer').style.display='none';
-  el('myPseudo').textContent = currentUser.username;
-  el('myEloClock').textContent = currentUser.elo;
-  
-  // --- calcul ELO théorique depuis l'historique ---
-  let hist = getHistory().filter(h => h.winner===username || h.loser===username);
-  let theoreticalElo = 1000;
-  for(let h of hist){
-  if(h.winner===username) theoreticalElo += h.eloChange;
-  else if(h.loser===username) theoreticalElo -= h.eloChange;
+  try{
+    const profile = await dbGetProfileByUsername(username);
+    if(!profile){ el('loginStatus').textContent="Pseudo ou mdp incorrect"; el('loginBtn').disabled=false; return; }
+
+    // compare password using bcrypt
+    const matches = bcrypt.compareSync(password, profile.password || '');
+    if(!matches){ el('loginStatus').textContent="Pseudo ou mdp incorrect"; el('loginBtn').disabled=false; return; }
+
+    // success: set current user
+    currentUser = { username: profile.username, elo: parseInt(profile.elo || 1000) };
+
+    // update UI
+    el('myElo').textContent = currentUser.elo;
+    el('loginContainer').style.display='none';
+    el('controls').style.display='flex';
+    el('playerInfo').style.display='flex';
+    el('myEloContainer').style.display='block';
+    el('opponentContainer').style.display='none';
+    el('myPseudo').textContent = currentUser.username;
+    el('myEloClock').textContent = currentUser.elo;
+    el('loginStatus').textContent = 'Connecté en tant que ' + currentUser.username;
+
+    // cache locally
+    let users = getLocalUsers();
+    users[currentUser.username] = { password: '***', elo: currentUser.elo };
+    saveLocalUsers(users);
+  }catch(err){
+    console.error(err);
+    el('loginStatus').textContent = 'Erreur connexion: ' + (err.message || JSON.stringify(err));
+  } finally {
+    el('loginBtn').disabled = false;
   }
-  // si différence > 100, corriger l'ELO
-  if(Math.abs(currentUser.elo - theoreticalElo) > 100){
-  currentUser.elo = theoreticalElo;
-  users[username].elo = theoreticalElo;
-  saveUsers(users);
-  }
-  
-  if(!allowedUsers.includes(username)){ el('loginStatus').textContent="Pseudo non autorisé"; return; }
 };
 
 // ---------------- PLATEAU ----------------
@@ -460,7 +533,11 @@ function updateBoard(){
     for(let c=0;c<7;c++){
       const color=board[r][c];
       const idx=r*7+c;
-      discs[idx].style.background=color||'#111';
+      const elDisc = discs[idx];
+      if(!elDisc) continue;
+      if(color==='red'){ elDisc.className='disc red'; }
+      else if(color==='yellow'){ elDisc.className='disc yellow'; }
+      else { elDisc.className='disc'; elDisc.style.background = '#111'; }
     }
   }
 }
@@ -497,37 +574,64 @@ function checkWin(row,col,color){
 }
 
 // ---------------- GAME END + ELO ----------------
-function endGame(message, winnerColor=null){
+async function endGame(message, winnerColor=null){
   gameOver=true; stopAllIntervals(); clearBoard();
   myTime=300; opTime=300; updateClocks();
   el('rematchContainer').style.display='flex';
   setStatus(message);
   
-  if(winnerColor){
-    let users=getUsers();
-    let myElo=currentUser.elo;
-    let opElo=parseInt(el('opElo').textContent)||1000;
-    let S=(winnerColor===myColor)?1:0;
-    let E=1/(1+Math.pow(10,(opElo-myElo)/400));
-    let delta=Math.round(16*(S-E));
-    currentUser.elo=myElo+delta;
-    el('myElo').textContent=currentUser.elo;
-    users[currentUser.username].elo=currentUser.elo;
-    saveUsers(users);
-    if(dc?.readyState==='open') dc.send(JSON.stringify({playerInfo:{username:currentUser.username, elo:currentUser.elo}}));
-    
-    // --- enregistrer l'historique de la partie ---
-    let hist = getHistory();
-    hist.push({
-    winner: winnerColor===myColor ? currentUser.username : el('opPseudo').textContent,
-    loser: winnerColor===myColor ? el('opPseudo').textContent : currentUser.username,
-    eloChange: delta,
-    timestamp: Date.now()
-    });
-    saveHistory(hist);
+  if(winnerColor && currentUser){
+    // compute elo change (same algorithm as before: K ~ 16)
+    try{
+      // fetch opponent elo from displayed field (if present), otherwise fallback 1000
+      let opElo = parseInt(el('opElo').textContent) || 1000;
+      let myElo = currentUser.elo;
+      // If opponent is the local player (rare), ensure correct, but normally opponent is remote
+      let S = (winnerColor===myColor)?1:0;
+      let E = 1/(1+Math.pow(10,(opElo-myElo)/400));
+      let delta = Math.round(16*(S-E));
+      const newElo = myElo + delta;
+
+      // Update currentUser and UI
+      currentUser.elo = newElo;
+      el('myElo').textContent = currentUser.elo;
+      el('myEloClock').textContent = currentUser.elo;
+
+      // Update DB
+      await dbUpdateElo(currentUser.username, newElo);
+
+      // also update local cache for UX
+      let users = getLocalUsers();
+      if(users[currentUser.username]) users[currentUser.username].elo = newElo;
+      else users[currentUser.username] = { password:'***', elo:newElo };
+      saveLocalUsers(users);
+
+      // notify opponent over data channel
+      if(dc?.readyState==='open') dc.send(JSON.stringify({playerInfo:{username:currentUser.username, elo:currentUser.elo}}));
+
+      // --- enregistrer l'historique de la partie ---
+      let hist = getHistory();
+      hist.push({
+        winner: winnerColor===myColor ? currentUser.username : el('opPseudo').textContent,
+        loser: winnerColor===myColor ? el('opPseudo').textContent : currentUser.username,
+        eloChange: delta,
+        timestamp: Date.now()
+      });
+      saveHistory(hist);
+    }catch(err){
+      console.error('Erreur lors MAJ ELO:', err);
+      // still save history locally
+      let hist = getHistory();
+      hist.push({
+        winner: winnerColor===myColor ? currentUser.username : el('opPseudo').textContent,
+        loser: winnerColor===myColor ? el('opPseudo').textContent : currentUser.username,
+        eloChange: 0,
+        timestamp: Date.now()
+      });
+      saveHistory(hist);
+    }
   }
 }
-
 // ---------------- SWITCH TURN + CLOCK ----------------
 function switchTurn(){
   if(turn===myColor){ stopClock(myInterval); turn=opponentColor; startClock(turn); setStatus("Tour de l'autre joueur"); }
@@ -547,8 +651,10 @@ function stopAllIntervals(){ stopClock(myInterval); stopClock(opInterval); }
 function updateClocks(){ 
   el('myClock').textContent = formatTime(myTime); 
   el('opClock').textContent = formatTime(opTime); 
-  el('myPseudo').textContent = currentUser.username;
-  el('myEloClock').textContent = currentUser.elo;
+  if(currentUser){
+    el('myPseudo').textContent = currentUser.username;
+    el('myEloClock').textContent = currentUser.elo;
+  }
   // si adversaire déjà connecté
   if(el('opPseudo').textContent !== "—"){
     el('opEloClock').textContent = el('opElo').textContent;
@@ -595,9 +701,9 @@ function setupDC(){
     if(msg.endGame) endGame(msg.endGame);
     if(msg.playerInfo){ el('opName').textContent=msg.playerInfo.username; el('opElo').textContent=msg.playerInfo.elo; }
     if(msg.playerInfo){
-    el('opPseudo').textContent = msg.playerInfo.username;
-    el('opEloClock').textContent = msg.playerInfo.elo;
-    el('opponentContainer').style.display='block'; // si tu veux afficher le conteneur horloge dès qu’adversaire là
+      el('opPseudo').textContent = msg.playerInfo.username;
+      el('opEloClock').textContent = msg.playerInfo.elo;
+      el('opponentContainer').style.display='block'; // si tu veux afficher le conteneur horloge dès qu’adversaire là
     }
   };
 }
