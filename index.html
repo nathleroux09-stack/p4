@@ -250,42 +250,98 @@ function opponentJoined(){
   setStatus(`Adversaire trouvé ! Vous jouez ${myColor === 'red' ? 'en premier (rouge)' : 'en second (jaune)'}`);
 }
 
-// ---------- CLICK SUR COLONNE ----------
+// ---------- HANDLE COLUMN CLICK ----------
 async function handleColumnClick(col) {
   if (!currentMatch || gameOver) return;
-  if (turn !== myColor) return;
+  if (turn !== myColor) return; // interdiction de jouer si ce n'est pas notre tour
+
   if (!dropDisc(col, myColor)) return;
 
-  turn = opponentColor;
+  // Mettre à jour boardstate et le tour dans Supabase
+  const nextTurn = (myColor === 'red') ? 'yellow' : 'red';
+  turn = nextTurn;
+
   await supabase.from('matches').update({
     boardstate: JSON.stringify(board),
     last_move: col,
-    last_player: currentUser.username
+    last_player: currentUser.username,
+    turn: nextTurn
   }).eq('id', currentMatch.id);
+
+  // Démarrer/arrêter les pendules
+  startClock();
 }
 
-// ---------- GESTION TEMPS ----------
+// ---------- OPPONENT JOINED / UPDATE ----------
+supabase.channel(`public:matches:id=eq.${currentMatch.id}`)
+  .on('postgres_changes', { event:'UPDATE', schema:'public', table:'matches', filter:`id=eq.${currentMatch.id}` }, payload => {
+    // Mettre à jour currentMatch
+    currentMatch = payload.new;
+
+    // Recevoir le coup de l'autre joueur
+    const move = payload.new.last_move;
+    const movePlayer = payload.new.last_player;
+    const boardstate = payload.new.boardstate;
+
+    if (boardstate) {
+      try {
+        board = JSON.parse(boardstate);
+        updateBoard();
+      } catch(e) { console.error("Erreur parsing boardstate:", e); }
+    }
+
+    // Mettre à jour le tour
+    turn = payload.new.turn;
+
+    // Si l'autre joueur a joué, on drop le jeton
+    if (movePlayer && movePlayer !== currentUser.username) {
+      dropDisc(move, opponentColor);
+    }
+
+    startClock(); // démarre le bon minuteur
+    updateClocks();
+  }).subscribe();
+
+// ---------- CLOCK MANAGEMENT ----------
 function startClock() {
+  // Stop tous les intervalles
   clearInterval(myInterval);
   clearInterval(opInterval);
-  myInterval = setInterval(() => {
-    myTime--;
-    updateClocks();
-    if (myTime <= 0) endGame("Temps écoulé !", opponentColor);
-  }, 1000);
+  if (gameOver) return;
+
+  if (turn === myColor) {
+    // Mon tour -> mon minuteur descend
+    myInterval = setInterval(() => {
+      myTime--;
+      updateClocks();
+      if (myTime <= 0) endGame("Temps écoulé !", opponentColor);
+    }, 1000);
+  } else {
+    // Tour adversaire -> son minuteur descend
+    opInterval = setInterval(() => {
+      opTime--;
+      updateClocks();
+      if (opTime <= 0) endGame("Temps écoulé !", myColor);
+    }, 1000);
+  }
 }
 
+// ---------- UPDATE CLOCKS / DISPLAY ----------
 function updateClocks() {
+  // Mon affichage
   el('myClock').textContent = formatTime(myTime);
-  el('opClock').textContent = formatTime(opTime);
-}
+  el('myPseudo').textContent = currentUser.username;
+  el('myEloClock').textContent = currentUser.elo;
 
-function formatTime(t) {
-  const m = String(Math.floor(t / 60)).padStart(2, '0');
-  const s = String(t % 60).padStart(2, '0');
-  return `${m}:${s}`;
+  // Adversaire
+  if (currentMatch && currentMatch.player1 && currentMatch.player2) {
+    const opName = (currentUser.username === currentMatch.player1) ? currentMatch.player2 : currentMatch.player1;
+    const opElo = (currentUser.username === currentMatch.player1) ? currentMatch.p2_elo : currentMatch.p1_elo;
+    el('opClock').textContent = formatTime(opTime);
+    el('opPseudo').textContent = opName;
+    el('opEloClock').textContent = opElo;
+  }
 }
-
 // ---------- FIN DE PARTIE ----------
 async function endGame(msg, winnerColor) {
   if (gameOver) return;
