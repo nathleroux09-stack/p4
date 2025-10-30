@@ -87,7 +87,7 @@ let myTime = 300, opTime = 300, myInterval = null, opInterval = null;
 let currentUser = null, currentMatch = null, firstMovePlayed = false;
 let realtimeChannel = null;
 
-// ---------- UTILS ----------
+// ---------- UTIL ----------
 function formatTime(t){ const min = String(Math.floor(t/60)).padStart(2,'0'); const sec = String(t%60).padStart(2,'0'); return `${min}:${sec}`; }
 
 function resetLocalTimers(){
@@ -109,7 +109,6 @@ function hidePseudosAndClocksAndShowMatchmaking(){
   el('controls').style.display = 'flex';
 }
 
-// Idempotent reset after match deletion
 function resetAfterMatchDeletion(){
   gameOver = false;
   turn = null;
@@ -163,7 +162,6 @@ async function dropDisc(col,color){
       // si premier coup de la partie -> activer la logique de pendules (les intervals démarrent seulement après)
       if(!firstMovePlayed){
         firstMovePlayed = true;
-        // start clocks logic will be triggered via updateClocks when appropriate
       }
 
       // vérifie victoire
@@ -172,42 +170,55 @@ async function dropDisc(col,color){
         let winnerPseudo = (currentUser && color === myColor) ? currentUser.username : getOpponentPseudo();
         if(!winnerPseudo) winnerPseudo = color === 'red' ? 'Red' : 'Yellow';
 
-        // Afficher immédiatement pour local
+        // Afficher immédiatement localement
         el('status').textContent = `${winnerPseudo} a gagné !`;
         gameOver = true;
 
-        // Arrêter pendules et remettre à 5:00 pour affichage
+        // Stop timers locally and show reset values (5:00)
         resetLocalTimers();
-        el('myClock').textContent = formatTime(300);
-        el('opClock').textContent = formatTime(300);
+        if(el('myClock')) el('myClock').textContent = formatTime(300);
+        if(el('opClock')) el('opClock').textContent = formatTime(300);
 
-        // Cacher pseudos & pendules et afficher matchmaking (immédiat pour UX)
+        // Hide UI pieces
         el('playerInfo').style.display = 'none';
         el('clocks').style.display = 'none';
         el('controls').style.display = 'flex';
 
-        // Mettre à jour Supabase: status finished + winner + boardstate
+        // IMPORTANT : envoyer en une seule écriture atomique le board final + status finished + winner
         try{
           await supabase.from('matches').update({
             boardstate: JSON.stringify(board),
             status: 'finished',
             winner: winnerPseudo
           }).eq('id', currentMatch.id);
+          // await ensures the DB has persisted the final boardstate + finished flag
         }catch(err){
-          console.error('Erreur update finish:', err);
+          console.error('Erreur enregistrement finish:', err);
         }
 
-        // Lancer suppression après 5s (pour couper la connexion). L'autre joueur recevra l'UPDATE then DELETE events.
+        // Supprimer ensuite la ligne après 5s (donner le temps à la subscription de propager l'UPDATE)
         setTimeout(async () => {
           try{
             await supabase.from('matches').delete().eq('id', currentMatch.id);
           }catch(err){
             console.error('Erreur suppression match:', err);
-            // Même si la suppression échoue, on laisse l'UI locale réinitialisée
+            // si delete échoue, on reset localement quand même
             resetAfterMatchDeletion();
           }
         }, 5000);
+
+      } else {
+        // Coup normal : envoyer boardstate + nouveau tour de manière atomique
+        try{
+          await supabase.from('matches').update({
+            boardstate: JSON.stringify(board),
+            turn: (color === 'red' ? 'yellow' : 'red')
+          }).eq('id', currentMatch.id);
+        }catch(err){
+          console.error('Erreur update move:', err);
+        }
       }
+
       return true;
     }
   }
@@ -314,17 +325,15 @@ el('joinMatch').onclick = async () => {
 
   resetLocalTimers();
   startListeningMatch();
-  updateClocks(); // met à jour affichage, n'active pas encore les intervals si première coup non joué
+  updateClocks();
 };
 
-// ---------- SUPABASE SUBSCRIPTION ----------
+// ---------- SUBSCRIPTION ----------
 function startListeningMatch(){
-  // unsubscribe previous to avoid duplicates
   if(realtimeChannel){
     try{ realtimeChannel.unsubscribe(); }catch(e){}
     realtimeChannel = null;
   }
-
   if(!currentMatch || !currentMatch.id) return;
 
   realtimeChannel = supabase
@@ -335,7 +344,7 @@ function startListeningMatch(){
 
       const isDelete = (!payload.new && payload.old);
       if(isDelete){
-        // match supprimé -> réinitialiser l'UI de façon idempotente
+        // match supprimé -> réinitialiser l'UI
         resetAfterMatchDeletion();
         return;
       }
@@ -343,7 +352,7 @@ function startListeningMatch(){
       const updated = payload.new;
       if(!updated) return;
 
-      // MAJ board si présent
+      // MAJ board si présent (important: on applique boardstate AVANT l'event finished pour afficher le dernier jeton)
       try{ if(updated.boardstate) board = JSON.parse(updated.boardstate); }catch(e){ console.warn('board parse err', e); }
 
       // MAJ currentMatch fields safely
@@ -364,8 +373,8 @@ function startListeningMatch(){
         clearInterval(myInterval); clearInterval(opInterval);
         myInterval = null; opInterval = null;
         myTime = 300; opTime = 300;
-        el('myClock').textContent = formatTime(300);
-        el('opClock').textContent = formatTime(300);
+        if(el('myClock')) el('myClock').textContent = formatTime(300);
+        if(el('opClock')) el('opClock').textContent = formatTime(300);
 
         // Afficher le message (winner stocké comme pseudo)
         if(updated.winner) el('status').textContent = `${updated.winner} a gagné !`;
@@ -375,8 +384,7 @@ function startListeningMatch(){
         el('clocks').style.display = 'none';
         el('controls').style.display = 'flex';
 
-        // NOTE: la suppression du match DB sera faite par le client qui a initié la victoire (après 5s).
-        // Si la suppression a déjà eu lieu, l'event DELETE arrivera et resetAfterMatchDeletion() gèrera tout.
+        // La suppression (DELETE) sera effectuée par le client qui a initié la victoire après 5s.
       }
 
       updateBoard();
@@ -389,23 +397,8 @@ async function handleColumnClick(col){
   if(!currentMatch){ el('status').textContent = 'Pas de match actif'; return; }
   if (!turn || turn !== myColor || gameOver) return; // ne peut jouer que si c'est son tour
   if (!await dropDisc(col, myColor)) return;
-
-  // si victoire locale, dropDisc s'est occupé d'UPDATE status finished -> on arrête ici (gameOver true)
-  if(gameOver) return;
-
-  // Premier coup joué -> activer la logique de pendules
-  if(!firstMovePlayed){
-    firstMovePlayed = true;
-    // Les intervals seront lancés par updateClocks selon "turn"
-  }
-
-  // Mettre à jour Supabase pour transmettre le coup et changer de tour
-  try{
-    await supabase.from('matches').update({
-      boardstate: JSON.stringify(board),
-      turn: opponentColor
-    }).eq('id', currentMatch.id);
-  }catch(e){ console.error('Erreur update move:', e); }
+  // si non-victoire, le dropDisc a déjà fait await de l'update move
+  // si victoire, dropDisc a déjà fait await de l'update finish puis planifié le delete
 }
 
 // ---------- CLOCKS ----------
@@ -423,16 +416,15 @@ function updateClocks(){
     el('opEloClock').textContent = opElo ?? '';
   }
 
-  // Ne pas démarrer les intervals avant le 1er coup
+  // Ne pas démarrer les intervals avant le 1er coup ou si partie finie
   if(!firstMovePlayed || gameOver) return;
 
-  // Lancer/arrêter les intervals selon le tour
   if(turn === myColor){
     if(!myInterval) myInterval = setInterval(() => {
       myTime--;
       if(el('myClock')) el('myClock').textContent = formatTime(myTime);
       if(myTime <= 0){
-        // Le joueur a perdu par temps -> l'autre gagne
+        // perte par time -> l'autre gagne
         endGame(getOpponentPseudo() + ' a gagné !', opponentColor);
       }
     }, 1000);
@@ -449,24 +441,24 @@ function updateClocks(){
   }
 }
 
-// ---------- END GAME ----------
+// ---------- END GAME / HELPERS ----------
 function getOpponentPseudo(){
   if(!currentMatch) return '';
   return currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
 }
 
 function endGame(displayMsg, winnerColor){
-  // displayMsg peut être une phrase complète (ex: "Paul a gagné !") ou on peut dériver
+  // usage: displayMsg peut être 'Paul a gagné !' ou on construit depuis winnerColor
   gameOver = true;
   clearInterval(myInterval); clearInterval(opInterval);
   myInterval = null; opInterval = null;
 
-  // Remettre pendules à 5:00 pour affichage
+  // Remettre pendules à 5:00 affichage
   myTime = 300; opTime = 300;
   if(el('myClock')) el('myClock').textContent = formatTime(myTime);
   if(el('opClock')) el('opClock').textContent = formatTime(opTime);
 
-  // Bloquer les jeux localement
+  // Bloquer localement
   turn = null;
 
   // Afficher message
@@ -476,36 +468,33 @@ function endGame(displayMsg, winnerColor){
     el('status').textContent = `${winnerPseudo} a gagné !`;
   }
 
-  // Cacher pseudos et pendules, ré-afficher matchmaking
+  // Cacher pseudos & pendules & remettre matchmaking visible
   el('playerInfo').style.display = 'none';
   el('clocks').style.display = 'none';
   el('controls').style.display = 'flex';
 
-  // Mettre à jour DB si match existe pour informer l'autre joueur
+  // Si match existant, écrire finished + winner (cela assure que l'autre client reçoit l'UPDATE si besoin)
   if(currentMatch && currentMatch.id){
-    // Écrire finished (s'il n'est pas déjà écrit)
     supabase.from('matches').update({
       status: 'finished',
-      winner: displayMsg ? displayMsg.replace(' a gagné !','') : (winnerColor === myColor ? currentUser.username : getOpponentPseudo()),
+      winner: (displayMsg ? displayMsg.replace(' a gagné !','') : (winnerColor === myColor ? currentUser.username : getOpponentPseudo())),
       boardstate: JSON.stringify(board)
     }).eq('id', currentMatch.id).catch(e => console.error('err endgame update', e));
 
-    // Supprimer la partie après 5s (autre joueur recevra event DELETE)
+    // delete après 5s
     setTimeout(async () => {
       try{
         await supabase.from('matches').delete().eq('id', currentMatch.id);
       }catch(e){
         console.error('err deleting after timeout', e);
-        // même si échec on réinitialise localement
+        // si delete échoue -> reset local
         resetAfterMatchDeletion();
       }
     }, 5000);
   } else {
-    // pas de match en base -> reset local après 5s
     setTimeout(() => resetAfterMatchDeletion(), 5000);
   }
 }
-
 </script>
 </body>
 </html>
