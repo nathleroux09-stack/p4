@@ -41,6 +41,7 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
 </head>
 <body>
 <h1>Puissance 4 Matchmaking</h1>
+
 <div id="loginContainer">
   <input type="text" id="usernameInput" placeholder="Pseudo">
   <input type="password" id="passwordInput" placeholder="Mot de passe">
@@ -48,18 +49,23 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
   <button id="loginBtn">Se connecter</button>
   <div id="loginStatus"></div>
 </div>
+
 <div id="playerInfo" style="display:none;">
   <div id="myEloContainer">Elo : <span id="myElo"></span></div>
 </div>
+
 <div id="controls" style="display:none;">
   <button id="joinMatch">Chercher adversaire</button>
   <div id="status">Statut : Déconnecté</div>
 </div>
+
 <div id="clocks" style="display:none;">
   <div id="myClockContainer"><span id="myPseudo"></span> (<span id="myEloClock"></span>) : <span id="myClock">05:00</span></div>
   <div id="opClockContainer"><span id="opPseudo"></span> (<span id="opEloClock"></span>) : <span id="opClock">05:00</span></div>
 </div>
+
 <div id="board"></div>
+
 <div id="rematchContainer">
   <button id="rematchBtn">Revanche</button>
   <button id="declineBtn">✖</button>
@@ -105,7 +111,7 @@ async function dropDisc(col,color){
   for(let r=5;r>=0;r--){
     if(!board[r][col]){
       board[r][col]=color; updateBoard();
-      if(checkWin(r,col,color)) {
+      if(checkWin(r,col,color)){
         endGame(`${color} gagne !`, color);
         await supabase.from('matches').update({
           boardstate: JSON.stringify(board),
@@ -207,52 +213,10 @@ function startListeningMatch() {
             const updated = payload.new;
             board = JSON.parse(updated.boardstate);
             turn = updated.turn;
-
-            // Actualise les infos de l'adversaire si dispo
-            if (updated.player1 && updated.player2) {
-                currentMatch.player1 = updated.player1;
-                currentMatch.player2 = updated.player2;
-                currentMatch.p1_elo = updated.p1_elo;
-                currentMatch.p2_elo = updated.p2_elo;
-            }
-
             updateBoard();
             updateClocks();
 
-// 🧩 --- Fin de partie partagée + Synchronisation Supabase ---
-
-function endGame(message, winnerColor) {
-    gameOver = true;
-    clearInterval(myInterval);
-    clearInterval(opInterval);
-
-    el("status").textContent = message;
-    el("status").style.color = winnerColor === "red" ? "red" : "gold";
-
-    // Enregistrer la fin de la partie dans Supabase
-    if (currentMatch && currentMatch.id) {
-        supabase.from("matches").update({
-            boardstate: JSON.stringify(board),
-            status: "finished",
-            winner: winnerColor,
-        }).eq("id", currentMatch.id);
-    }
-}
-
-// 🧩 --- Fonction pour écouter les mises à jour du match en temps réel ---
-function startListeningMatch() {
-    supabase
-        .channel("realtime-matches")
-        .on("postgres_changes", {
-            event: "*",
-            schema: "public",
-            table: "matches",
-            filter: `id=eq.${currentMatch.id}`
-        }, payload => {
-            const updated = payload.new;
-            if (!updated) return;
-
-            // Actualisation des données du match
+            // 🔄 MAJ des infos adverses
             if (updated.player1 && updated.player2) {
                 currentMatch.player1 = updated.player1;
                 currentMatch.player2 = updated.player2;
@@ -260,138 +224,68 @@ function startListeningMatch() {
                 currentMatch.p2_elo = updated.p2_elo;
             }
 
-            // Actualisation du plateau
-            if (updated.boardstate) {
-                board = JSON.parse(updated.boardstate);
-                updateBoard();
-            }
-
-            // Actualisation du tour
-            if (updated.turn) {
-                turn = updated.turn;
-                updateClocks();
-            }
-
-            // Si la partie est terminée, afficher le résultat sur les deux écrans
-            if (updated.status === "finished" && !gameOver) {
+            // 🏁 Détection fin partie synchronisée
+            if (updated.status === 'finished' && !gameOver) {
                 gameOver = true;
-                clearInterval(myInterval);
-                clearInterval(opInterval);
-
-                el("status").textContent = `Partie terminée : ${updated.winner === "red" ? "🔴 Rouge" : "🟡 Jaune"} gagne !`;
-                el("status").style.color = updated.winner === "red" ? "red" : "gold";
+                clearInterval(myInterval); clearInterval(opInterval);
+                el('status').textContent = `Partie terminée : ${updated.winner} gagne !`;
             }
         })
         .subscribe();
 }
 
-// 🧩 --- Gestion du clic sur le plateau ---
+// ------------------ HANDLE COLUMN CLICK ------------------
 async function handleColumnClick(col) {
-    if (gameOver) return;
+    if (!turn || turn !== myColor || gameOver) return; // ne peut jouer que si c'est son tour
+    if (!await dropDisc(col, myColor)) return;
 
-    const color = currentColor;
-    if (turn !== color) return; // ce n’est pas ton tour
-
-    const row = getLowestEmptyRow(col);
-    if (row === -1) return;
-
-    board[row][col] = color;
-    updateBoard();
-
-    // Vérifie victoire
-    if (checkWin(row, col, color)) {
-        endGame(`${color === "red" ? "🔴 Rouge" : "🟡 Jaune"} gagne !`, color);
-        await supabase.from("matches").update({
-            boardstate: JSON.stringify(board),
-            turn: color,
-            status: "finished",
-            winner: color
-        }).eq("id", currentMatch.id);
-        return;
-    }
-
-    // Sinon, passe le tour
-    turn = color === "red" ? "yellow" : "red";
-    await supabase.from("matches").update({
+    // Mettre à jour Supabase pour l'autre joueur
+    await supabase.from('matches').update({
         boardstate: JSON.stringify(board),
-        turn: turn
-    }).eq("id", currentMatch.id);
+        turn: opponentColor
+    }).eq('id', currentMatch.id);
 }
 
-// 🧩 --- Vérification de victoire ---
-function checkWin(row, col, color) {
-    const dirs = [
-        [0, 1], [1, 0], [1, 1], [1, -1]
-    ];
-    for (const [dr, dc] of dirs) {
-        let count = 1;
-        count += countInDirection(row, col, dr, dc, color);
-        count += countInDirection(row, col, -dr, -dc, color);
-        if (count >= 4) return true;
-    }
-    return false;
-}
-
-function countInDirection(r, c, dr, dc, color) {
-    let count = 0;
-    for (let i = 1; i < 4; i++) {
-        const nr = r + dr * i, nc = c + dc * i;
-        if (nr < 0 || nr >= 6 || nc < 0 || nc >= 7) break;
-        if (board[nr][nc] === color) count++;
-        else break;
-    }
-    return count;
-}
-
-// 🧩 --- Fonction pour trouver la ligne vide la plus basse ---
-function getLowestEmptyRow(col) {
-    for (let r = 5; r >= 0; r--) {
-        if (!board[r][col]) return r;
-    }
-    return -1;
-}
-
-// 🧩 --- Mise à jour visuelle du plateau ---
-function updateBoard() {
-    const cells = document.querySelectorAll(".cell");
-    cells.forEach((cell, i) => {
-        const row = Math.floor(i / 7);
-        const col = i % 7;
-        const color = board[row][col];
-        cell.style.backgroundColor = color === "red" ? "red" : color === "yellow" ? "gold" : "#1e293b";
-    });
-}
-
-// 🧩 --- Mise à jour de la pendule ---
+// ------------------ CLOCKS ------------------
 function updateClocks() {
-    const myClock = (turn === currentColor) ? "myClock" : "opClock";
-    const opClock = (turn !== currentColor) ? "myClock" : "opClock";
+    el('myClock').textContent = formatTime(myTime);
+    el('opClock').textContent = formatTime(opTime);
+    el('myPseudo').textContent = currentUser.username;
+    el('myEloClock').textContent = currentUser.elo;
+    el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
+    el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
 
-    clearInterval(myInterval);
-    clearInterval(opInterval);
-
-    if (turn === currentColor) {
-        myInterval = setInterval(() => {
+    // Gestion des pendules
+    if (turn === myColor) {
+        if (!myInterval) myInterval = setInterval(() => {
             myTime--;
-            el(myClock).textContent = formatTime(myTime);
-            if (myTime <= 0) endGame("Temps écoulé !", turn === "red" ? "yellow" : "red");
+            el('myClock').textContent = formatTime(myTime);
+            if(myTime<=0) endGame("Temps écoulé", opponentColor);
         }, 1000);
+        if (opInterval) { clearInterval(opInterval); opInterval = null; }
     } else {
-        opInterval = setInterval(() => {
+        if (!opInterval) opInterval = setInterval(() => {
             opTime--;
-            el(opClock).textContent = formatTime(opTime);
-            if (opTime <= 0) endGame("Temps écoulé !", turn);
+            el('opClock').textContent = formatTime(opTime);
+            if(opTime<=0) endGame("Temps écoulé", myColor);
         }, 1000);
+        if (myInterval) { clearInterval(myInterval); myInterval = null; }
     }
 }
 
 function formatTime(t) {
-    const m = Math.floor(t / 60);
-    const s = t % 60;
-    return `${m}:${s < 10 ? "0" + s : s}`;
+    const min = String(Math.floor(t / 60)).padStart(2, '0');
+    const sec = String(t % 60).padStart(2, '0');
+    return `${min}:${sec}`;
 }
 
-// 🧩 --- Helpers DOM ---
-function el(id) { return document.getElementById(id); }
+// ------------------ END GAME ------------------
+function endGame(msg, winnerColor) {
+    gameOver = true;
+    clearInterval(myInterval); clearInterval(opInterval);
+    el('status').textContent = `Partie terminée : ${msg}`;
+}
 
 </script>
+</body>
+</html>
