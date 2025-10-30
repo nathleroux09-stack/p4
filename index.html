@@ -137,18 +137,42 @@ el('createAccountBtn').onclick=async()=>{
   el('loginStatus').textContent="Compte créé, connecte-toi";
 };
 
-el('loginBtn').onclick=async()=>{
-  const username=el('usernameInput').value.trim(), password=el('passwordInput').value.trim();
-  if(!username||!password){el('loginStatus').textContent="Pseudo et mdp requis"; return;}
-  const {data,error}=await supabase.from('profiles').select('*').eq('username',username).eq('password',password).single();
-  if(error||!data){el('loginStatus').textContent="Pseudo ou mdp incorrect"; return;}
-  currentUser={username:data.username, elo:parseInt(data.elo)};
-  el('myElo').textContent=currentUser.elo;
-  el('loginContainer').style.display='none';
-  el('controls').style.display='flex';
-  el('playerInfo').style.display='flex';
-  el('myPseudo').textContent=currentUser.username;
-  el('myEloClock').textContent=currentUser.elo;
+el('loginBtn').onclick = async () => {
+  const username = el('usernameInput').value.trim();
+  const password = el('passwordInput').value.trim();
+  if (!username || !password) {
+    el('loginStatus').textContent = "Pseudo et mdp requis";
+    return;
+  }
+
+  // Récupérer l'utilisateur uniquement par pseudo
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, password, elo') // ajuste si ta colonne mot de passe a un autre nom
+    .eq('username', username)
+    .single();
+
+  if (error || !data) {
+    el('loginStatus').textContent = "Pseudo ou mdp incorrect";
+    return;
+  }
+
+  // Comparer le mot de passe côté client
+  if (data.password !== password) {
+    el('loginStatus').textContent = "Pseudo ou mdp incorrect";
+    return;
+  }
+
+  // Login réussi
+  currentUser = { username: data.username, elo: parseInt(data.elo) || 1000 };
+  el('myElo').textContent = currentUser.elo;
+  el('loginContainer').style.display = 'none';
+  el('controls').style.display = 'flex';
+  el('playerInfo').style.display = 'flex';
+  el('myPseudo').textContent = currentUser.username;
+  el('myEloClock').textContent = currentUser.elo;
+  el('status').textContent = 'Statut : Disponible';
+  el('loginStatus').textContent = '';
 };
 
 // ------------------ MATCHMAKING ------------------
