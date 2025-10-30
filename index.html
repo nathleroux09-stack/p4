@@ -41,7 +41,6 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
 </head>
 <body>
 <h1>Puissance 4 Matchmaking</h1>
-
 <div id="loginContainer">
   <input type="text" id="usernameInput" placeholder="Pseudo">
   <input type="password" id="passwordInput" placeholder="Mot de passe">
@@ -49,30 +48,23 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
   <button id="loginBtn">Se connecter</button>
   <div id="loginStatus"></div>
 </div>
-
 <div id="playerInfo" style="display:none;">
   <div id="myEloContainer">Elo : <span id="myElo"></span></div>
 </div>
-
 <div id="controls" style="display:none;">
   <button id="joinMatch">Chercher adversaire</button>
   <div id="status">Statut : Déconnecté</div>
 </div>
-
 <div id="clocks" style="display:none;">
   <div id="myClockContainer"><span id="myPseudo"></span> (<span id="myEloClock"></span>) : <span id="myClock">05:00</span></div>
   <div id="opClockContainer"><span id="opPseudo"></span> (<span id="opEloClock"></span>) : <span id="opClock">05:00</span></div>
 </div>
-
 <div id="board"></div>
-
 <div id="rematchContainer">
   <button id="rematchBtn">Revanche</button>
   <button id="declineBtn">✖</button>
   <span id="rematchStatus"></span>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 const SUPABASE_URL = 'https://arqyrmvnenrtxqryihnz.supabase.co';
@@ -111,13 +103,28 @@ async function dropDisc(col,color){
   for(let r=5;r>=0;r--){
     if(!board[r][col]){
       board[r][col]=color; updateBoard();
+
       if(checkWin(r,col,color)){
-        endGame(`${color} gagne !`, color);
+        const winnerPseudo = color === myColor ? currentUser.username : (currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1);
+        endGame(`${winnerPseudo} a gagné !`, color);
+
         await supabase.from('matches').update({
           boardstate: JSON.stringify(board),
           status: 'finished',
-          winner: color
+          winner: winnerPseudo
         }).eq('id', currentMatch.id);
+
+        setTimeout(async () => {
+          board = Array(6).fill().map(()=>Array(7).fill(''));
+          updateBoard();
+          el('status').textContent = "Statut : Partie terminée";
+          gameOver = false;
+          turn = null;
+          await supabase.from('matches').delete().eq('id', currentMatch.id);
+          currentMatch = null;
+        }, 5000);
+
+        return true;
       }
       return true;
     }
@@ -136,7 +143,7 @@ function checkWin(row,col,color){
   return false;
 }
 
-// ---------- LOGIN / CREATE ----------
+// ------------------ LOGIN / CREATE ------------------
 el('createAccountBtn').onclick=async()=>{
   const username=el('usernameInput').value.trim(), password=el('passwordInput').value.trim();
   if(!username||!password){el('loginStatus').textContent="Pseudo et mdp requis"; return;}
@@ -189,10 +196,7 @@ el('joinMatch').onclick = async () => {
             boardstate: JSON.stringify(board),
             turn: 'red'
         }]).select().single();
-        if (error) {
-            el('status').textContent = "Statut : Erreur création match";
-            return;
-        }
+        if (error) { el('status').textContent = "Statut : Erreur création match"; return; }
         currentMatch = newMatch;
         myColor = 'red';
         opponentColor = 'yellow';
@@ -207,43 +211,56 @@ el('joinMatch').onclick = async () => {
 
 // ------------------ SUPABASE SUBSCRIPTION ------------------
 function startListeningMatch() {
-    supabase
-        .channel('realtime-matches')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `id=eq.${currentMatch.id}` }, payload => {
-            const updated = payload.new;
-            board = JSON.parse(updated.boardstate);
-            turn = updated.turn;
+  supabase
+    .channel('realtime-matches')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `id=eq.${currentMatch?.id}` }, async payload => {
+        const updated = payload.new;
+        if(!updated) return;
+
+        board = JSON.parse(updated.boardstate);
+        turn = updated.turn;
+        updateBoard();
+        updateClocks();
+
+        if (updated.player1 && updated.player2) {
+          currentMatch.player1 = updated.player1;
+          currentMatch.player2 = updated.player2;
+          currentMatch.p1_elo = updated.p1_elo;
+          currentMatch.p2_elo = updated.p2_elo;
+        }
+
+        // Gestion de la fin de partie côté récepteur
+        if (updated.status === 'finished' && !gameOver) {
+          const winnerPseudo = updated.winner;
+          endGame(`${winnerPseudo} a gagné !`, updated.turn === myColor ? myColor : opponentColor);
+          
+          setTimeout(async () => {
+            board = Array(6).fill().map(()=>Array(7).fill(''));
             updateBoard();
-            updateClocks();
-
-            // 🔄 MAJ des infos adverses
-            if (updated.player1 && updated.player2) {
-                currentMatch.player1 = updated.player1;
-                currentMatch.player2 = updated.player2;
-                currentMatch.p1_elo = updated.p1_elo;
-                currentMatch.p2_elo = updated.p2_elo;
+            el('status').textContent = "Statut : Partie terminée";
+            gameOver = false;
+            turn = null;
+            if(currentMatch) {
+              await supabase.from('matches').delete().eq('id', currentMatch.id);
+              currentMatch = null;
             }
-
-            // 🏁 Détection fin partie synchronisée
-            if (updated.status === 'finished' && !gameOver) {
-                gameOver = true;
-                clearInterval(myInterval); clearInterval(opInterval);
-                el('status').textContent = `Partie terminée : ${updated.winner} gagne !`;
-            }
-        })
-        .subscribe();
+          }, 5000);
+        }
+    })
+    .subscribe();
 }
 
 // ------------------ HANDLE COLUMN CLICK ------------------
 async function handleColumnClick(col) {
-    if (!turn || turn !== myColor || gameOver) return; // ne peut jouer que si c'est son tour
+    if (!turn || turn !== myColor || gameOver) return;
     if (!await dropDisc(col, myColor)) return;
 
-    // Mettre à jour Supabase pour l'autre joueur
-    await supabase.from('matches').update({
+    if(currentMatch) {
+      await supabase.from('matches').update({
         boardstate: JSON.stringify(board),
         turn: opponentColor
-    }).eq('id', currentMatch.id);
+      }).eq('id', currentMatch.id);
+    }
 }
 
 // ------------------ CLOCKS ------------------
@@ -252,21 +269,18 @@ function updateClocks() {
     el('opClock').textContent = formatTime(opTime);
     el('myPseudo').textContent = currentUser.username;
     el('myEloClock').textContent = currentUser.elo;
-    el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
-    el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
+    el('opPseudo').textContent = currentMatch?.player1 === currentUser.username ? currentMatch.player2 : currentMatch?.player1 || '';
+    el('opEloClock').textContent = currentMatch?.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch?.p1_elo || '';
 
-    // Gestion des pendules
     if (turn === myColor) {
         if (!myInterval) myInterval = setInterval(() => {
-            myTime--;
-            el('myClock').textContent = formatTime(myTime);
+            myTime--; el('myClock').textContent = formatTime(myTime);
             if(myTime<=0) endGame("Temps écoulé", opponentColor);
         }, 1000);
         if (opInterval) { clearInterval(opInterval); opInterval = null; }
     } else {
         if (!opInterval) opInterval = setInterval(() => {
-            opTime--;
-            el('opClock').textContent = formatTime(opTime);
+            opTime--; el('opClock').textContent = formatTime(opTime);
             if(opTime<=0) endGame("Temps écoulé", myColor);
         }, 1000);
         if (myInterval) { clearInterval(myInterval); myInterval = null; }
@@ -285,7 +299,6 @@ function endGame(msg, winnerColor) {
     clearInterval(myInterval); clearInterval(opInterval);
     el('status').textContent = `Partie terminée : ${msg}`;
 }
-
 </script>
 </body>
 </html>
