@@ -72,7 +72,7 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
   <button id="declineBtn">✖</button>
   <span id="rematchStatus"></span>
 </div>
-
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
 <!-- NOTE: on n'inclut PAS le script non-module pour supabase pour éviter conflits -->
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
@@ -477,4 +477,3 @@ function endGame(msg, winnerColor){
 </script>
 </body>
 </html>
-
