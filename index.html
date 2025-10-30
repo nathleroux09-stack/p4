@@ -211,17 +211,22 @@ async function handleColumnClick(col) {
     if (!turn || turn !== myColor || gameOver) return; // ne peut jouer que si c'est son tour
     if (!dropDisc(col, myColor)) return;
 
-    // Mettre à jour Supabase
-    await supabase.from('matches').update({
+    // Désactiver le clic immédiatement
+    turn = null;
+
+    // Mettre à jour Supabase avec le move et le tour pour l’autre joueur
+    const { error } = await supabase.from('matches').update({
         boardstate: JSON.stringify(board),
         turn: opponentColor
     }).eq('id', currentMatch.id);
+    if(error) console.log("Erreur sendMove:", error);
 }
 
 // ------------------ CLOCKS ------------------
 function updateClocks() {
     el('myClock').textContent = formatTime(myTime);
     el('opClock').textContent = formatTime(opTime);
+
     el('myPseudo').textContent = currentUser.username;
     el('myEloClock').textContent = currentUser.elo;
     el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
@@ -229,11 +234,23 @@ function updateClocks() {
 
     // Gestion des pendules
     if (turn === myColor) {
-        if (!myInterval) myInterval = setInterval(() => { myTime--; el('myClock').textContent = formatTime(myTime); if(myTime<=0) endGame("Temps écoulé", opponentColor); }, 1000);
+        if (!myInterval) myInterval = setInterval(() => {
+            myTime--;
+            el('myClock').textContent = formatTime(myTime);
+            if(myTime <= 0) endGame("Temps écoulé !", opponentColor);
+        }, 1000);
         if (opInterval) { clearInterval(opInterval); opInterval = null; }
-    } else {
-        if (!opInterval) opInterval = setInterval(() => { opTime--; el('opClock').textContent = formatTime(opTime); if(opTime<=0) endGame("Temps écoulé", myColor); }, 1000);
+    } else if (turn === opponentColor) {
+        if (!opInterval) opInterval = setInterval(() => {
+            opTime--;
+            el('opClock').textContent = formatTime(opTime);
+            if(opTime <= 0) endGame("Temps écoulé !", myColor);
+        }, 1000);
         if (myInterval) { clearInterval(myInterval); myInterval = null; }
+    } else {
+        // stop tout si tour inconnu (pendule bloquée pendant l'update)
+        if(myInterval) { clearInterval(myInterval); myInterval = null; }
+        if(opInterval) { clearInterval(opInterval); opInterval = null; }
     }
 }
 
