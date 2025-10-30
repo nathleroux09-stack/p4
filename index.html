@@ -226,16 +226,17 @@ function listenMatchChanges(matchId){
 
 // ---------------- SEND MOVE ----------------
 async function handleColumnClick(col){
-  if(!currentMatch||gameOver) return;
-  if(currentMatch.turn!==myColor) return; // Blocage hors tour
-  if(!dropDisc(col,myColor)) return;
+  if(!currentMatch || gameOver) return;
+  if(currentMatch.turn !== myColor) return; // bloque hors tour
 
+  if(!dropDisc(col, myColor)) return; // si colonne pleine
+
+  // Met à jour le board et change le tour côté Supabase
   await supabase.from('matches').update({
     boardstate: JSON.stringify(board),
-    turn: opponentColor
-  }).eq('id',currentMatch.id);
+    turn: (myColor === 'red') ? 'yellow' : 'red' // ← changement automatique du tour
+  }).eq('id', currentMatch.id);
 }
-
 // ---------------- CLOCKS ----------------
 function updateClocks(){
   if(!currentMatch) return;
