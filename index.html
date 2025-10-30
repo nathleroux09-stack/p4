@@ -165,36 +165,51 @@ async function dropDisc(col,color){
       }
 
       // vérifie victoire
-      if(checkWin(r,col,color)){
-        // Déterminer pseudo du gagnant
-        let winnerPseudo = (currentUser && color === myColor) ? currentUser.username : getOpponentPseudo();
-        if(!winnerPseudo) winnerPseudo = color === 'red' ? 'Red' : 'Yellow';
+if (checkWin(r, col, color)) {
+  // Déterminer pseudo du gagnant
+  let winnerPseudo = (currentUser && color === myColor)
+    ? currentUser.username
+    : getOpponentPseudo();
+  if (!winnerPseudo) winnerPseudo = color === 'red' ? 'Red' : 'Yellow';
 
-        // Afficher immédiatement localement
-        el('status').textContent = `${winnerPseudo} a gagné !`;
-        gameOver = true;
+  // Afficher immédiatement localement
+  el('status').textContent = `${winnerPseudo} a gagné !`;
+  gameOver = true;
 
-        // Stop timers locally and show reset values (5:00)
-        resetLocalTimers();
-        if(el('myClock')) el('myClock').textContent = formatTime(300);
-        if(el('opClock')) el('opClock').textContent = formatTime(300);
+  // Stop les pendules et réinitialise visuellement
+  resetLocalTimers();
+  if (el('myClock')) el('myClock').textContent = formatTime(300);
+  if (el('opClock')) el('opClock').textContent = formatTime(300);
 
-        // Hide UI pieces
-        el('playerInfo').style.display = 'none';
-        el('clocks').style.display = 'none';
-        el('controls').style.display = 'flex';
+  // Cacher les éléments inutiles pendant la fin de partie
+  el('playerInfo').style.display = 'none';
+  el('clocks').style.display = 'none';
+  el('controls').style.display = 'flex';
 
-        // IMPORTANT : envoyer en une seule écriture atomique le board final + status finished + winner
-        try{
-          await supabase.from('matches').update({
-            boardstate: JSON.stringify(board),
-            status: 'finished',
-            winner: winnerPseudo
-          }).eq('id', currentMatch.id);
-          // await ensures the DB has persisted the final boardstate + finished flag
-        }catch(err){
-          console.error('Erreur enregistrement finish:', err);
-        }
+  // ⚙️ Mise à jour atomique : board final + statut + gagnant + blocage des tours
+  try {
+    await supabase.from('matches').update({
+      boardstate: JSON.stringify(board),
+      status: 'finished',
+      winner: winnerPseudo,
+      turn: null // empêche tout coup supplémentaire
+    }).eq('id', currentMatch.id);
+  } catch (err) {
+    console.error('Erreur enregistrement finish:', err);
+  }
+
+  // ⏳ Attendre la propagation avant suppression du match
+  setTimeout(async () => {
+    try {
+      await supabase.from('matches').delete().eq('id', currentMatch.id);
+      resetAfterMatchDeletion();
+    } catch (err) {
+      console.error('Erreur suppression match:', err);
+    }
+  }, 5000);
+
+  return;
+}
 
         // Supprimer ensuite la ligne après 5s (donner le temps à la subscription de propager l'UPDATE)
         setTimeout(async () => {
