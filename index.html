@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8" />
 <title>Puissance 4 Matchmaking</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
 :root{
   --bg:#071128; --card:#0e2436; --muted:#9fb7c7; --text:#e8f3fb;
@@ -73,7 +74,6 @@ button:hover{ transform: translateY(-2px); } button:active{ transform: translate
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
-
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 const SUPABASE_URL = 'https://arqyrmvnenrtxqryihnz.supabase.co';
@@ -82,238 +82,476 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const el = id => document.getElementById(id);
 
-let board = Array(6).fill().map(() => Array(7).fill(''));
-let turn = null, myColor = null, opponentColor = null, gameOver = false, firstMovePlayed = false;
+// Etat local
+let board = Array(6).fill().map(()=>Array(7).fill(''));
+let turn = null, myColor = null, opponentColor = null, gameOver = false;
 let myTime = 300, opTime = 300, myInterval = null, opInterval = null;
-let currentUser = null, currentMatch = null, realtimeChannel = null;
+let currentUser = null, currentMatch = null, firstMovePlayed = false;
+let realtimeChannel = null;
 
-// ------------------ BOARD ------------------
+// ---------- UTIL ----------
+function formatTime(t){ const min = String(Math.floor(t/60)).padStart(2,'0'); const sec = String(t%60).padStart(2,'0'); return `${min}:${sec}`; }
+
+function resetLocalTimers(){
+  myTime = 300; opTime = 300;
+  if(myInterval){ clearInterval(myInterval); myInterval = null; }
+  if(opInterval){ clearInterval(opInterval); opInterval = null; }
+  el('myClock').textContent = formatTime(myTime);
+  el('opClock').textContent = formatTime(opTime);
+  if(currentUser) el('myEloClock').textContent = currentUser.elo;
+  if(currentUser) el('myPseudo').textContent = currentUser.username;
+}
+
+function resetBoardLocal(){
+  board = Array(6).fill().map(()=>Array(7).fill(''));
+  updateBoard();
+  firstMovePlayed = false;
+  turn = null;
+}
+
+// reset complet après suppression match (ou event delete)
+function resetAfterMatchDeletion(){
+  gameOver = false;
+  if(myInterval){ clearInterval(myInterval); myInterval = null; }
+  if(opInterval){ clearInterval(opInterval); opInterval = null; }
+  myTime = 300; opTime = 300;
+  resetBoardLocal();
+  currentMatch = null;
+  myColor = null; opponentColor = null; turn = null; firstMovePlayed = false;
+  // stop channel
+  if(realtimeChannel){
+    try{ realtimeChannel.unsubscribe(); }catch(e){}
+    realtimeChannel = null;
+  }
+  // UI: show matchmaking, hide clocks & player info
+  el('controls').style.display = 'flex';
+  el('clocks').style.display = 'none';
+  el('playerInfo').style.display = 'none';
+  el('status').textContent = 'Statut : Déconnecté';
+}
+
+// ---------- BOARD ----------
 function createBoard(){
-  const boardDiv = el('board'); boardDiv.innerHTML='';
-  for(let r=0;r<6;r++){for(let c=0;c<7;c++){
-    const cell=document.createElement('div'); cell.className='cell'; cell.dataset.col=c;
-    const disc=document.createElement('div'); disc.className='disc'; cell.appendChild(disc);
-    cell.onclick=()=>handleColumnClick(c);
-    boardDiv.appendChild(cell);
-  }}
+  const boardDiv = el('board'); boardDiv.innerHTML = '';
+  for(let r=0;r<6;r++){
+    for(let c=0;c<7;c++){
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.col = c;
+      const disc = document.createElement('div');
+      disc.className = 'disc';
+      cell.appendChild(disc);
+      cell.onclick = () => handleColumnClick(c);
+      boardDiv.appendChild(cell);
+    }
+  }
 }
 createBoard();
 
 function updateBoard(){
-  const discs=document.querySelectorAll('.disc');
-  for(let r=0;r<6;r++){for(let c=0;c<7;c++){
-    if(board[r][c]==='red') discs[r*7+c].className='disc red dropped';
-    else if(board[r][c]==='yellow') discs[r*7+c].className='disc yellow dropped';
-    else discs[r*7+c].className='disc';
-  }}
+  const discs = document.querySelectorAll('.disc');
+  for(let r=0;r<6;r++){
+    for(let c=0;c<7;c++){
+      const idx = r*7 + c;
+      if(board[r][c] === 'red') discs[idx].className = 'disc red dropped';
+      else if(board[r][c] === 'yellow') discs[idx].className = 'disc yellow dropped';
+      else discs[idx].className = 'disc';
+    }
+  }
 }
 
-function dropDisc(col,color){
+// retourne true si posé, false si colonne pleine
+async function dropDisc(col, color){
   for(let r=5;r>=0;r--){
     if(!board[r][col]){
-      board[r][col]=color; updateBoard();
+      board[r][col] = color;
+      updateBoard();
+
+      // si premier coup, on démarre localement les pendules (les autres clients démarreront dès qu'ils verront le move)
+      if(!firstMovePlayed){
+        firstMovePlayed = true;
+        // on démarre clocks seulement si c'est le tour courant (updateClocks gère ça)
+        updateClocks();
+      }
+
+      // Vérification victoire
+      if(checkWin(r, col, color)){
+        // stop timers localement
+        gameOver = true;
+        if(myInterval){ clearInterval(myInterval); myInterval = null; }
+        if(opInterval){ clearInterval(opInterval); opInterval = null; }
+
+        // pseudo gagnant (on stocke le pseudo en base pour que l'autre voit le même texte)
+        let winnerPseudo = 'Joueur';
+        if(currentUser && color === myColor) winnerPseudo = currentUser.username;
+        else if(currentMatch){
+          if(currentMatch.player1 === currentUser.username) winnerPseudo = currentMatch.player2 || (color === 'red' ? 'Red' : 'Yellow');
+          else winnerPseudo = currentMatch.player1 || (color === 'red' ? 'Red' : 'Yellow');
+        } else {
+          winnerPseudo = (color === 'red' ? 'Red' : 'Yellow');
+        }
+
+        el('status').textContent = `${winnerPseudo} a gagné !`;
+
+        // Mettre à jour DB: status finished + winner + boardstate
+        try{
+          if(currentMatch && currentMatch.id){
+            await supabase.from('matches').update({
+              boardstate: JSON.stringify(board),
+              status: 'finished',
+              winner: winnerPseudo
+            }).eq('id', currentMatch.id);
+          }
+        }catch(err){
+          console.error('Erreur update finish:', err);
+        }
+
+        // Après 5s : reset local & supprimer match en base (si possible)
+        setTimeout(async () => {
+          // reset UI local
+          resetBoardLocal();
+          resetLocalTimers();
+          // hide clocks and player info, show matchmaking
+          el('clocks').style.display = 'none';
+          el('playerInfo').style.display = 'none';
+          el('controls').style.display = 'flex';
+          el('status').textContent = 'Statut : Partie terminée';
+
+          // supprimer la partie côté DB (cela déclenchera l'event DELETE chez l'autre joueur)
+          try{
+            if(currentMatch && currentMatch.id){
+              await supabase.from('matches').delete().eq('id', currentMatch.id);
+            }
+          }catch(err){
+            console.error('Erreur suppression match après victoire:', err);
+          }
+
+          // Reset local state to allow next matchmaking
+          gameOver = false;
+          currentMatch = null;
+          myColor = null;
+          opponentColor = null;
+        }, 5000);
+      }
+
       return true;
     }
   }
   return false;
 }
 
-function checkWin(row,col,color){
-  const dirs=[[1,0],[0,1],[1,1],[1,-1]];
-  const countDir=(dr,dc)=>{
-    let r=row+dr, c=col+dc, cnt=0;
-    while(r>=0&&r<6&&c>=0&&c<7&&board[r][c]===color){cnt++; r+=dr; c+=dc;}
+function checkWin(row, col, color){
+  const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  const countDir = (dr,dc) => {
+    let r = row + dr, c = col + dc, cnt = 0;
+    while(r>=0 && r<6 && c>=0 && c<7 && board[r][c] === color){ cnt++; r += dr; c += dc; }
     return cnt;
+  };
+  for(const [dr,dc] of dirs){
+    if(1 + countDir(dr,dc) + countDir(-dr,-dc) >= 4) return true;
   }
-  for(const [dr,dc] of dirs){if(1+countDir(dr,dc)+countDir(-dr,-dc)>=4) return true;}
   return false;
 }
 
-// ------------------ LOGIN / CREATE ------------------
-el('createAccountBtn').onclick=async()=>{
-  const username=el('usernameInput').value.trim(), password=el('passwordInput').value.trim();
-  if(!username||!password){el('loginStatus').textContent="Pseudo et mdp requis"; return;}
-  const {data,error}=await supabase.from('profiles').insert([{username,password,elo:1000}]);
-  if(error){el('loginStatus').textContent="Erreur création compte: "+error.message; return;}
-  el('loginStatus').textContent="Compte créé, connecte-toi";
+// ---------- LOGIN / CREATE ----------
+el('createAccountBtn').onclick = async () => {
+  const username = el('usernameInput').value.trim();
+  const password = el('passwordInput').value.trim();
+  if(!username || !password){ el('loginStatus').textContent = "Pseudo et mdp requis"; return; }
+  const { data, error } = await supabase.from('profiles').insert([{ username, password, elo: 1000 }]);
+  if(error){ el('loginStatus').textContent = "Erreur création compte: " + error.message; return; }
+  el('loginStatus').textContent = "Compte créé, connecte-toi";
 };
 
-el('loginBtn').onclick=async()=>{
-  const username=el('usernameInput').value.trim(), password=el('passwordInput').value.trim();
-  if(!username||!password){el('loginStatus').textContent="Pseudo et mdp requis"; return;}
-  const {data,error}=await supabase.from('profiles').select('*').eq('username',username).eq('password',password).single();
-  if(error||!data){el('loginStatus').textContent="Pseudo ou mdp incorrect"; return;}
-  currentUser={username:data.username, elo:parseInt(data.elo)};
-  el('myElo').textContent=currentUser.elo;
-  el('loginContainer').style.display='none';
-  el('controls').style.display='flex';
-  el('playerInfo').style.display='flex';
-  el('myPseudo').textContent=currentUser.username;
-  el('myEloClock').textContent=currentUser.elo;
+el('loginBtn').onclick = async () => {
+  const username = el('usernameInput').value.trim();
+  const password = el('passwordInput').value.trim();
+  if(!username || !password){ el('loginStatus').textContent = "Pseudo et mdp requis"; return; }
+  const { data, error } = await supabase.from('profiles').select('*').eq('username', username).eq('password', password).single();
+  if(error || !data){ el('loginStatus').textContent = "Pseudo ou mdp incorrect"; return; }
+  currentUser = { username: data.username, elo: parseInt(data.elo) };
+  el('myElo').textContent = currentUser.elo;
+  el('loginContainer').style.display = 'none';
+  el('controls').style.display = 'flex';
+  el('playerInfo').style.display = 'flex';
+  el('myPseudo').textContent = currentUser.username;
+  el('myEloClock').textContent = currentUser.elo;
+  el('status').textContent = 'Statut : Disponible';
+  resetLocalTimers();
 };
 
 // ------------------ MATCHMAKING ------------------
 el('joinMatch').onclick = async () => {
-    if (!currentUser) { el('status').textContent = 'Connecte-toi d\'abord'; return; }
+  if(!currentUser){ el('status').textContent = 'Connecte-toi d\'abord'; return; }
 
-    el('status').textContent = "Statut : Recherche adversaire...";
+  el('status').textContent = "Statut : Recherche adversaire...";
+  // Chercher match waiting (qui n'est pas nous)
+  try{
+    const { data: waitingMatch, error: errWait } = await supabase
+      .from('matches')
+      .select('*')
+      .eq('status', 'waiting')
+      .neq('player1', currentUser.username)
+      .limit(1)
+      .single();
 
-    const { data: waitingMatch } = await supabase
-        .from('matches')
-        .select('*')
-        .eq('status', 'waiting')
-        .neq('player1', currentUser.username)
-        .limit(1)
-        .single();
+    if(errWait && errWait.code !== 'PGRST116'){ console.error('errWait', errWait); el('status').textContent = 'Erreur matchmaking'; return; }
 
-    if (waitingMatch) {
-        currentMatch = waitingMatch;
+    if(waitingMatch && waitingMatch.id){
+      // rejoindre match existant -> mets à jour et récupère l'objet match à jour
+      try{
+        await supabase.from('matches').update({
+          player2: currentUser.username,
+          p2_elo: currentUser.elo,
+          turn: 'red',
+          status: 'playing',
+          boardstate: JSON.stringify(board)
+        }).eq('id', waitingMatch.id);
+
+        const { data: updatedMatch } = await supabase.from('matches').select('*').eq('id', waitingMatch.id).single();
+        currentMatch = updatedMatch;
         myColor = 'yellow';
         opponentColor = 'red';
-        await supabase.from('matches').update({
-            player2: currentUser.username,
-            p2_elo: currentUser.elo,
-            turn: 'red',
-            status: 'playing',
-            boardstate: JSON.stringify(board)
-        }).eq('id', currentMatch.id);
+      }catch(e){
+        console.error('Erreur join match update:', e);
+      }
     } else {
-        const { data: newMatch } = await supabase.from('matches').insert([{
-            player1: currentUser.username,
-            p1_elo: currentUser.elo,
-            status: 'waiting',
-            boardstate: JSON.stringify(board),
-            turn: 'red'
+      // créer un nouveau match
+      try{
+        const { data: newMatch, error } = await supabase.from('matches').insert([{
+          player1: currentUser.username,
+          p1_elo: currentUser.elo,
+          status: 'waiting',
+          boardstate: JSON.stringify(board),
+          turn: 'red'
         }]).select().single();
+
+        if(error){ console.error('err create match', error); el('status').textContent = 'Erreur création match'; return; }
         currentMatch = newMatch;
         myColor = 'red';
         opponentColor = 'yellow';
+      }catch(e){
+        console.error('Erreur creating match:', e);
+        el('status').textContent = 'Erreur création match';
+        return;
+      }
     }
 
+    // UI
     el('controls').style.display = 'none';
     el('clocks').style.display = 'flex';
     el('playerInfo').style.display = 'flex';
     el('status').textContent = "Statut : Match trouvé !";
 
-    // Affichage adversaire
-    el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
-    el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
+    // show opponent info if available
+    if(currentMatch){
+      el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 ?? '' : currentMatch.player1 ?? '';
+      el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo ?? '' : currentMatch.p1_elo ?? '';
+    }
 
-    startListeningMatch();
+    // reset timers locally and start listening
     resetLocalTimers();
+    startListeningMatch();
+    updateClocks();
+  }catch(err){
+    console.error('Erreur matchmaking global:', err);
+    el('status').textContent = 'Erreur matchmaking';
+  }
 };
 
 // ------------------ SUPABASE SUBSCRIPTION ------------------
-function startListeningMatch() {
-    if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} }
-    realtimeChannel = supabase
-        .channel('realtime-matches')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `id=eq.${currentMatch.id}` }, payload => {
-            const updated = payload.new;
-            if (!updated) return;
-            board = JSON.parse(updated.boardstate);
-            turn = updated.turn;
-            updateBoard();
+function startListeningMatch(){
+  // unsubscribe previous channel to avoid duplicates
+  if(realtimeChannel){
+    try{ realtimeChannel.unsubscribe(); }catch(e){ console.warn(e); }
+    realtimeChannel = null;
+  }
 
-            // Affichage pseudo/elo adversaire
-            el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
-            el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
+  if(!currentMatch || !currentMatch.id) return;
 
-            // Si partie terminée
-            if (updated.status === 'finished') {
-                handleEndGame(updated.winnerColor, updated.winnerPseudo);
-            }
+  realtimeChannel = supabase
+    .channel('realtime-matches-' + currentMatch.id)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `id=eq.${currentMatch.id}` }, payload => {
+      // payload may contain .new (insert/update) or .old (delete)
+      const updated = payload.new;
+      const deletedEvent = payload.old && !payload.new;
 
-            updateClocks();
-        }).subscribe();
+      if(deletedEvent){
+        // match deleted -> reset UI/state for this client
+        resetAfterMatchDeletion();
+        return;
+      }
+
+      if(!updated) return;
+
+      // MAJ currentMatch fields (so rouge voit p2)
+      currentMatch.player1 = updated.player1 ?? currentMatch.player1;
+      currentMatch.player2 = updated.player2 ?? currentMatch.player2;
+      currentMatch.p1_elo = updated.p1_elo ?? currentMatch.p1_elo;
+      currentMatch.p2_elo = updated.p2_elo ?? currentMatch.p2_elo;
+      currentMatch.turn = updated.turn ?? currentMatch.turn;
+      currentMatch.status = updated.status ?? currentMatch.status;
+      currentMatch.winner = updated.winner ?? currentMatch.winner;
+
+      // MAJ board si présent
+      try{
+        if(updated.boardstate) board = JSON.parse(updated.boardstate);
+      }catch(e){
+        console.warn('Erreur parse boardstate', e);
+      }
+
+      // MAJ variables locales
+      turn = updated.turn ?? turn;
+
+      // afficher plateau et infos
+      updateBoard();
+
+      el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 ?? '' : currentMatch.player1 ?? '';
+      el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo ?? '' : currentMatch.p1_elo ?? '';
+       // Si status finished -> bloquer et afficher winner pour les deux joueurs
+      if(updated.status === 'finished'){
+        gameOver = true;
+        // stop timers
+        if(myInterval){ clearInterval(myInterval); myInterval = null; }
+        if(opInterval){ clearInterval(opInterval); opInterval = null; }
+        // affiche le même texte que celui stocké en base
+        el('status').textContent = `${updated.winner} a gagné !`;
+
+        // Après 5s : on réinitialise l'UI local (la suppression de la ligne DB viendra ou est déjà venue)
+        setTimeout(() => {
+          // hide clocks and player info, show matchmaking
+          resetBoardLocal();
+          resetLocalTimers();
+          el('clocks').style.display = 'none';
+          el('playerInfo').style.display = 'none';
+          el('controls').style.display = 'flex';
+          // Note: si l'initiateur supprime la ligne, on recevra l'event DELETE et resetAfterMatchDeletion s'exécutera aussi (idempotent)
+          gameOver = false;
+          currentMatch = null;
+          myColor = null;
+          opponentColor = null;
+        }, 5000);
+      }
+
+      // gérer les pendules (démarrage s'il y a eu le premier coup)
+      updateClocks();
+    }).subscribe();
 }
 
 // ------------------ HANDLE COLUMN CLICK ------------------
-async function handleColumnClick(col) {
-    if (!turn || turn !== myColor || gameOver) return;
-    if (!dropDisc(col, myColor)) return;
+async function handleColumnClick(col){
+  if(!currentMatch){ el('status').textContent = 'Pas de match actif'; return; }
+  if(gameOver) return;
+  if(!turn || turn !== myColor) return; // ne peut jouer que si c'est son tour
 
-    // Premier coup joué
-    if (!firstMovePlayed) { firstMovePlayed = true; startClocks(); }
+  const placed = await dropDisc(col, myColor);
+  if(!placed) return;
 
-    // Vérifier victoire
-    for(let r=0;r<6;r++){
-        if(board[r][col]===myColor && checkWin(r,col,myColor)){
-            const winnerPseudo = currentUser.username;
-            gameOver = true;
+  // si la chute a fait gagner, dropDisc s'est chargé d'écrire finished en base.
+  if(gameOver) return;
 
-            await supabase.from('matches').update({
-                boardstate: JSON.stringify(board),
-                status: 'finished',
-                winnerColor: myColor,
-                winnerPseudo: winnerPseudo
-            }).eq('id', currentMatch.id);
-
-            handleEndGame(myColor, winnerPseudo);
-            return;
-        }
-    }
-
+  // sinon on update le board et le turn en base
+  try{
     await supabase.from('matches').update({
-        boardstate: JSON.stringify(board),
-        turn: opponentColor
+      boardstate: JSON.stringify(board),
+      turn: opponentColor
     }).eq('id', currentMatch.id);
+  }catch(e){
+    console.error('Erreur update move:', e);
+  }
 }
 
 // ------------------ CLOCKS ------------------
-function startClocks() {
-    if (myInterval || opInterval) return;
-    updateClocks();
-}
+function updateClocks(){
+  el('myClock').textContent = formatTime(myTime);
+  el('opClock').textContent = formatTime(opTime);
+  if(currentUser) el('myPseudo').textContent = currentUser.username;
+  if(currentUser) el('myEloClock').textContent = currentUser.elo;
 
-function updateClocks() {
-    el('myClock').textContent = formatTime(myTime);
-    el('opClock').textContent = formatTime(opTime);
-    el('myPseudo').textContent = currentUser.username;
-    el('myEloClock').textContent = currentUser.elo;
-    el('opPseudo').textContent = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
-    el('opEloClock').textContent = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
+  if(currentMatch){
+    const opPseudo = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
+    const opElo = currentMatch.player1 === currentUser.username ? currentMatch.p2_elo : currentMatch.p1_elo;
+    el('opPseudo').textContent = opPseudo ?? '';
+    el('opEloClock').textContent = opElo ?? '';
+  }
 
-    if (!firstMovePlayed) return;
+  // Les pendules ne démarrent que si un premier coup a été joué
+  if(!firstMovePlayed) return;
 
-    if (turn === myColor) {
-        if (!myInterval) myInterval = setInterval(() => {
-            myTime--; el('myClock').textContent = formatTime(myTime); if(myTime<=0) endGame("Temps écoulé", opponentColor);
-        }, 1000);
-        if (opInterval) { clearInterval(opInterval); opInterval = null; }
-    } else {
-        if (!opInterval) opInterval = setInterval(() => {
-            opTime--; el('opClock').textContent = formatTime(opTime); if(opTime<=0) endGame("Temps écoulé", myColor);
-        }, 1000);
-        if (myInterval) { clearInterval(myInterval); myInterval = null; }
+  // start/stop intervals selon le tour
+  if(turn === myColor && !gameOver){
+    if(!myInterval){
+      myInterval = setInterval(() => {
+        myTime--;
+        el('myClock').textContent = formatTime(myTime);
+        if(myTime <= 0) endGame("Temps écoulé", opponentColor);
+      }, 1000);
     }
+    if(opInterval){ clearInterval(opInterval); opInterval = null; }
+  } else if(!gameOver){
+    if(!opInterval){
+      opInterval = setInterval(() => {
+        opTime--;
+        el('opClock').textContent = formatTime(opTime);
+        if(opTime <= 0) endGame("Temps écoulé", myColor);
+      }, 1000);
+    }
+    if(myInterval){ clearInterval(myInterval); myInterval = null; }
+  }
 }
 
-function formatTime(t) { return `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`; }
+// ---------- END GAME ----------
+function endGame(msg, winnerColor){
+  // Si déjà en gameOver on évite double traitement
+  if(gameOver){
+    // mais on s'assure que tout est bien stoppé
+    if(myInterval){ clearInterval(myInterval); myInterval = null; }
+    if(opInterval){ clearInterval(opInterval); opInterval = null; }
+    return;
+  }
 
-// ------------------ END GAME ------------------
-async function handleEndGame(winnerColor, winnerPseudo) {
-    gameOver = true;
-    clearInterval(myInterval); clearInterval(opInterval);
-    el('status').textContent = `${winnerPseudo} a gagné !`;
-    myTime = 300; opTime = 300;
-    updateClocks();
+  gameOver = true;
+  if(myInterval){ clearInterval(myInterval); myInterval = null; }
+  if(opInterval){ clearInterval(opInterval); opInterval = null; }
 
+  // déterminer pseudo gagnant (si on a la couleur)
+  let winnerPseudo = msg;
+  if(winnerColor && currentMatch){
+    if(currentUser && winnerColor === myColor) winnerPseudo = currentUser.username;
+    else winnerPseudo = currentMatch.player1 === currentUser.username ? currentMatch.player2 : currentMatch.player1;
+  }
+
+  if(typeof winnerPseudo === 'string' && !winnerPseudo.endsWith(' a gagné !')){
+    winnerPseudo = `${winnerPseudo} a gagné !`;
+  }
+  el('status').textContent = winnerPseudo;
+
+  // écrire en base pour informer l'autre joueur
+  if(currentMatch && currentMatch.id){
+    supabase.from('matches').update({
+      status: 'finished',
+      winner: winnerPseudo,
+      boardstate: JSON.stringify(board)
+    }).eq('id', currentMatch.id).catch(e => console.error('err endgame update', e));
+
+    // supprimer la partie après 5s (l'event DELETE déclenchera reset côté autre joueur)
     setTimeout(async () => {
-        resetBoardLocal();
-        el('clocks').style.display='none';
-        el('playerInfo').style.display='none';
-        el('controls').style.display='flex';
-        gameOver=false; firstMovePlayed=false;
-
-        try { await supabase.from('matches').delete().eq('id', currentMatch.id); } catch(e){console.error(e);}
-        currentMatch=null;
+      try{
+        if(currentMatch && currentMatch.id){
+          await supabase.from('matches').delete().eq('id', currentMatch.id);
+        }
+      }catch(e){
+        console.error('err deleting after timeout', e);
+      }
+      // reset local UI in case delete didn't come through quickly
+      resetAfterMatchDeletion();
     }, 5000);
+  } else {
+    // si pas de currentMatch (déjà supprimée), on reset local
+    setTimeout(() => resetAfterMatchDeletion(), 5000);
+  }
 }
 
-// ------------------ RESET UTIL ------------------
-function resetBoardLocal(){ board=Array(6).fill().map(()=>Array(7).fill('')); updateBoard(); }
-function resetLocalTimers(){ myTime=300; opTime=300; clearInterval(myInterval); clearInterval(opInterval); myInterval=opInterval=null; updateClocks(); }
 </script>
 </body>
 </html>
